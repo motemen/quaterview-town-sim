@@ -169,6 +169,38 @@ export function generateTerrain(w: World): void {
 
   // 7. 駅: 線路の中央付近で、南側か北側が陸のところ。駅前は平らに均す。
   placeInitialStation(w, railTiles, straightRail, fixed);
+
+  // 8. 田畑: 平らな低地に長方形の区画を置く
+  placeFarms(w);
+}
+
+function placeFarms(w: World): void {
+  const S = w.w + 1;
+  const rng = w.rng;
+  const patches = 26 + rng.int(10);
+  for (let n = 0; n < patches; n++) {
+    const pw = 3 + rng.int(4);
+    const ph = 3 + rng.int(4);
+    const x0 = rng.int(w.w - pw);
+    const y0 = rng.int(w.h - ph);
+    const style = rng.chance(0.6) ? 0 : 1; // 田 / 畑
+    const orient = rng.int(2) * 2;
+    // 区画内の各タイルが平らな草地なら田畑にする (一部欠けてもよい)
+    let placed = 0;
+    for (let y = y0; y < y0 + ph; y++) {
+      for (let x = x0; x < x0 + pw; x++) {
+        const i = idx(w, x, y);
+        if (w.kind[i] !== Kind.Grass && w.kind[i] !== Kind.Forest) continue;
+        if (!isFlat(w, x, y) || w.height[y * S + x] > 1) continue;
+        // 駅前には置かない
+        if (w.stations.some((s) => Math.abs(s.x - x) + Math.abs(s.y - y) <= 2)) continue;
+        w.kind[i] = Kind.Farm;
+        w.bStyle[i] = style | orient;
+        placed++;
+      }
+    }
+    void placed;
+  }
 }
 
 /**

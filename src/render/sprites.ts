@@ -1,4 +1,5 @@
 import { hash2, hash3 } from "../sim/rng";
+import { buildingFloors, isMixedUse } from "../sim/growth";
 import { DIR_E, DIR_N, DIR_S, DIR_W, BState } from "../sim/world";
 import { HALF_H, HALF_W, TILE_H, TILE_W, diamondRows, pixelToUV, uvToPixel } from "./iso";
 import { PAL, ROOFS, SIGNS, TOWER_WALLS, WALLS } from "./palette";
@@ -12,7 +13,7 @@ export function clearSpriteCache(): void {
   pairCache.clear();
 }
 
-export type GroundKind = "grass" | "lot" | "park" | "concrete" | "water" | "sand" | "rubble";
+export type GroundKind = "grass" | "lot" | "park" | "concrete" | "water" | "sand" | "rubble" | "paddy" | "field";
 
 /** ダイヤ内の全ピクセルを (x, y, u, v) で巡る */
 function forEachDiamondPixel(fn: (x: number, y: number, u: number, v: number) => void): void {
@@ -46,7 +47,23 @@ const GROUND_COLORS: Record<GroundKind, [RGB, RGB, RGB]> = {
   water: [PAL.water, PAL.waterDark, PAL.waterLight],
   sand: [PAL.sand, shade(PAL.sand, 0.9), shade(PAL.sand, 1.08)],
   rubble: [PAL.dirtDark, shade(PAL.dirtDark, 0.8), PAL.concreteDark],
+  paddy: [[96, 156, 80], [72, 128, 64], [120, 176, 96]],
+  field: [[164, 128, 88], [136, 104, 68], [92, 152, 72]],
 };
+
+/** 田畑の [地, 畝の影, 作物] の色 */
+function farmColors(kind: "paddy" | "field", season: SeasonTint): [RGB, RGB, RGB] {
+  if (kind === "paddy") {
+    if (season === 0) return [[126, 164, 172], [104, 140, 152], [112, 176, 96]]; // 水を張った田
+    if (season === 1) return [[84, 156, 72], [64, 128, 56], [112, 184, 88]];
+    if (season === 2) return [[212, 180, 80], [176, 144, 56], [232, 204, 104]]; // 稲穂
+    return [[204, 196, 180], [172, 160, 140], [236, 232, 224]]; // 刈り取り後・雪
+  }
+  if (season === 0) return [[164, 128, 88], [136, 104, 68], [104, 168, 80]];
+  if (season === 1) return [[156, 120, 80], [128, 96, 60], [72, 140, 64]];
+  if (season === 2) return [[160, 124, 84], [132, 100, 64], [184, 136, 72]];
+  return [[212, 208, 200], [180, 172, 160], [236, 234, 230]];
+}
 
 /**
  * 地面タイル。rel は 4 隅の相対高さ [T,R,B,L] (0 or 1)。
@@ -84,6 +101,8 @@ export function groundSprite(kind: GroundKind, rel: readonly [number, number, nu
     const dzdy = (rB + rL - rT - rR) / 2;
     const bright = kind === "water" ? 1 : 1 + 0.22 * dzdx + 0.12 * dzdy;
     const [base, dark, light] = seasonalGround(kind, season).map((c) => shade(c, bright)) as [RGB, RGB, RGB];
+    const farm = kind === "paddy" || kind === "field" ? farmColors(kind, season) : null;
+    const farmAlongX = (variant & 2) !== 0;
     for (let x = 0; x < TILE_W; x++) {
       const xc = x + 0.5;
       let top: number;
@@ -112,6 +131,16 @@ export function groundSprite(kind: GroundKind, rel: readonly [number, number, nu
         } else if (kind === "rubble") {
           if (n < 0.2) c = light;
           else if (n < 0.3) c = dark;
+        } else if (farm) {
+          // 畝 (うね) の縞と、縁の畦 (あぜ)
+          const [u, v] = pixelToUV(x + 0.5, y - 8 + 0.5);
+          const along = farmAlongX ? v : u;
+          const phase = (along * 7) % 1;
+          if (u < 0.08 || v < 0.08 || u > 0.97 || v > 0.97) c = shade(PAL.dirtDark, 0.95);
+          else if (phase < 0.45) c = farm[2];
+          else if (phase < 0.6) c = farm[1];
+          else c = farm[0];
+          if (season === 3 && kind === "field" && n < 0.5) c = farm[2];
         } else {
           if (n < 0.09) c = dark;
           else if (n < 0.15) c = light;
@@ -351,174 +380,401 @@ export interface BuildingSpec {
   lights: number;
 }
 
-const FLOOR_H = [0, 7, 6, 6, 6] as const;
+const FLOOR_H = [0, 6, 6, 6, 6] as const;
 const FOOTPRINT = [0, 20, 28, 30, 32] as const;
 const TOTAL_FLOORS = [0, 1, 2, 5, 10] as const;
+
+const HOUSE_WALLS: RGB[] = [
+  [240, 236, 224],
+  [232, 220, 192],
+  [196, 160, 120],
+  [212, 212, 208],
+  [204, 220, 232],
+  [224, 204, 184],
+];
+const HOUSE_ROOFS: RGB[] = [
+  [176, 72, 64],
+  [72, 104, 168],
+  [104, 104, 112],
+  [64, 128, 96],
+  [168, 112, 64],
+  [120, 80, 120],
+  [88, 96, 104],
+  [200, 120, 72],
+];
+const NEON: RGB[] = [
+  [255, 104, 168],
+  [104, 232, 255],
+  [255, 224, 104],
+  [120, 255, 136],
+  [255, 160, 96],
+];
+
+/** 窓の 1 ピクセルを両方のラスタに置く */
+function putWindow(r: Raster, e: Raster, x: number, y: number, dayColor: RGB, lit: RGB | null): boolean {
+  r.set(x, y, dayColor);
+  if (lit) e.set(x, y, lit);
+  return lit !== null;
+}
 
 /** 建物スプライト (壁・屋根のみ、地面は別)。oy = 高さ - 16。 */
 export function buildingSprite(spec: BuildingSpec): { base: Sprite; emissive: Sprite | null } {
   const key = `b:${spec.level}:${spec.style}:${spec.floors}:${spec.state}:${spec.lights}`;
   return pairCache.get(key, () => {
-    const level = spec.level;
-    const fh = FLOOR_H[level];
-    const fw = FOOTPRINT[level];
-    const total = TOTAL_FLOORS[level];
-    const constructing = spec.state === BState.Constructing;
-    const abandoned = spec.state === BState.Abandoned;
-    const floors = constructing ? spec.floors : total;
-    const H = TILE_H + total * fh + 22;
-    const baseTop = H - TILE_H;
-    const r = new Raster(TILE_W, H);
-    const e = new Raster(TILE_W, H);
-    let anyLight = false;
+    if (spec.level === 1) return houseSprite(spec);
+    if (isMixedUse(spec.level, spec.style)) return mixedUseSprite(spec);
+    return boxBuildingSprite(spec);
+  });
+}
 
-    const st = spec.style;
-    let wall: RGB = level === 4 ? TOWER_WALLS[st % TOWER_WALLS.length] : WALLS[st % WALLS.length];
-    let roof: RGB = level <= 2 ? ROOFS[(st >> 3) % ROOFS.length] : shade(wall, 0.9);
-    if (abandoned) {
-      wall = mix(wall, [110, 110, 104], 0.55);
-      roof = mix(roof, [90, 90, 90], 0.55);
+/** 民家: 大きさ・階数・屋根の形と向き・色がスタイルで変わる */
+function houseSprite(spec: BuildingSpec): { base: Sprite; emissive: Sprite | null } {
+  const st = spec.style;
+  const total = buildingFloors(1, st);
+  const constructing = spec.state === BState.Constructing;
+  const abandoned = spec.state === BState.Abandoned;
+  const floors = constructing ? spec.floors : total;
+  const fh = 6;
+  const fw = [16, 20, 20, 24][(st >> 5) & 3];
+  const hip = ((st >> 3) & 1) === 1;
+  const ridgeAlongX = ((st >> 4) & 1) === 0;
+  const H = TILE_H + 2 * fh + 14;
+  const baseTop = H - TILE_H;
+  const r = new Raster(TILE_W, H);
+  const e = new Raster(TILE_W, H);
+  let anyLight = false;
+  let wall: RGB = HOUSE_WALLS[(st >> 1) % HOUSE_WALLS.length];
+  let roof: RGB = HOUSE_ROOFS[st % HOUSE_ROOFS.length];
+  if (abandoned) {
+    wall = mix(wall, [110, 110, 104], 0.55);
+    roof = mix(roof, [90, 90, 90], 0.55);
+  }
+  const wallL = wall;
+  const wallR = shade(wall, 0.72);
+  const x0 = HALF_W - fw / 2;
+  const x1 = HALF_W + fw / 2;
+  const wallH = floors * fh;
+
+  for (let x = x0; x < x1; x++) {
+    const [ytR, ybR] = diamondRows(x, fw);
+    const yt = ytR + baseTop;
+    const yb = ybR + baseTop;
+    const left = x < HALF_W;
+    const along = left ? x - x0 : x1 - 1 - x;
+    const wc = left ? wallL : wallR;
+    for (let y = yb - wallH + 1; y <= yb; y++) r.set(x, y, wc);
+    // 窓 (2px 幅、壁の端と中央の角は空ける)
+    if ((along % 4 === 1 || along % 4 === 2) && along < fw / 2 - 2) {
+      for (let f = 0; f < floors; f++) {
+        const fTop = yb - (f + 1) * fh + 1;
+        const lit = !abandoned && !constructing && hash3(spec.lights, f, along >> 2, left ? 1 : 2) < 0.45;
+        for (let wy = 2; wy <= 3; wy++) {
+          if (putWindow(r, e, x, fTop + wy, abandoned ? [60, 60, 64] : shade(PAL.windowDay, left ? 1 : 0.8), lit ? PAL.windowLitWarm : null)) anyLight = true;
+        }
+      }
     }
-    const wallL = wall;
-    const wallR = shade(wall, 0.72);
-    const roofLight = shade(roof, 1.1);
-    const sign = SIGNS[(st >> 2) % SIGNS.length];
-    const wallH = floors * fh;
-    const x0 = HALF_W - fw / 2;
-    const x1 = HALF_W + fw / 2;
-    const windowRows = level === 1 ? 2 : fh - 3;
-    const windowTop = level === 1 ? 2 : 1;
+    // 玄関
+    if (left && along === fw / 2 - 3 && floors > 0) {
+      for (let y = yb - 3; y <= yb; y++) r.set(x, y, shade(wc, 0.5));
+      r.set(x + 1, yb - 3, shade(wc, 0.5));
+      r.set(x + 1, yb - 2, shade(wc, 0.5));
+    }
+    if (x === HALF_W && wallH > 0) r.vline(x, yb - wallH + 1, yb, shade(wallR, 0.85));
+    // 屋根
+    if (floors === total && !constructing) {
+      const ridgeH = hip ? 3 : 4;
+      let last = -1;
+      for (let y = yt - wallH; y <= yb - wallH; y++) {
+        const A = (x + 0.5 - HALF_W) / (fw / 2);
+        const B = (y + 0.5 - baseTop - HALF_H + wallH) / (fw / 4) + 1;
+        const u = (A + B) / 2;
+        const v = (B - A) / 2;
+        const dv = 1 - Math.abs(2 * v - 1);
+        const du = 1 - Math.abs(2 * u - 1);
+        let eh: number;
+        let litFace: boolean;
+        if (hip) {
+          eh = Math.round(ridgeH * Math.min(1, 1.6 * Math.min(du, dv)));
+          litFace = dv < du ? v < 0.5 : u < 0.5;
+        } else if (ridgeAlongX) {
+          eh = Math.round(ridgeH * dv);
+          litFace = v < 0.5;
+        } else {
+          eh = Math.round(ridgeH * du);
+          litFace = u < 0.5;
+        }
+        const target = y - eh;
+        const color = litFace ? shade(roof, 1.1) : shade(roof, 0.78);
+        if (last >= 0) {
+          const lo = Math.min(last + 1, target);
+          const hi = Math.max(last - 1, target);
+          for (let yy = lo; yy <= hi; yy++) r.set(x, yy, color);
+        }
+        r.set(x, target, color);
+        last = target;
+      }
+      r.set(x, yb - wallH + 1, shade(roof, 0.6));
+    } else if (constructing) {
+      // 足場
+      const top = yb - (floors + 1) * fh + 1;
+      for (let y = top; y <= yb - floors * fh; y++) {
+        if (along % 3 === 0 || (y - top) % 3 === 0) r.set(x, y, PAL.scaffold);
+      }
+    }
+  }
+  // 煙突
+  if (!constructing && (st & 0x40) && !hip) {
+    const cx = x0 + 4;
+    const [, ybR] = diamondRows(cx, fw);
+    const top = ybR + baseTop - wallH - 6;
+    r.fillRect(cx, top, 2, 4, [150, 90, 80]);
+    r.hline(cx, cx + 1, top, [110, 70, 60]);
+  }
+  // 庭木 (小さい家)
+  if (fw <= 20 && ((st >> 2) & 1) && !constructing) {
+    const tx = fw === 16 ? 4 : 3;
+    const ty = baseTop + 11;
+    r.vline(tx, ty - 1, ty + 1, PAL.trunk);
+    r.disc(tx + 0.5, ty - 3, 2.2, PAL.canopy);
+    r.set(tx, ty - 4, PAL.canopyLight);
+  }
+  return { base: toSprite(r, 0, baseTop), emissive: anyLight ? toSprite(e, 0, baseTop) : null };
+}
 
-    for (let x = x0; x < x1; x++) {
-      const [ytR, ybR] = diamondRows(x, fw);
-      const yt = ytR + baseTop;
-      const yb = ybR + baseTop;
-      const left = x < HALF_W;
-      const along = left ? x - x0 : x1 - 1 - x;
-      const wc = left ? wallL : wallR;
-      // 壁
-      for (let y = yb - wallH + 1; y <= yb; y++) r.set(x, y, wc);
-      // 窓
-      const windowCol = level === 4 ? along % 3 !== 0 : along % 4 === 1 || along % 4 === 2;
-      if (windowCol && along < fw / 2 - 2) {
-        for (let f = 0; f < floors; f++) {
-          const fTop = yb - (f + 1) * fh + 1;
-          const lit = !abandoned && !constructing && hash3(spec.lights, f, along >> 2, left ? 1 : 2) < (level === 1 ? 0.5 : 0.62);
-          const boarded = abandoned && hash3(st, f, along >> 2, 7) < 0.5;
-          const warm = hash3(spec.lights, f, along >> 2, 3) < 0.7;
-          for (let wy = windowTop; wy < windowTop + windowRows; wy++) {
-            const y = fTop + wy;
-            r.set(x, y, boarded ? shade(PAL.dirtDark, 0.8) : abandoned ? [60, 60, 64] : shade(PAL.windowDay, left ? 1 : 0.8));
-            if (lit) {
-              e.set(x, y, warm ? PAL.windowLitWarm : level === 4 ? PAL.windowLitCool : PAL.windowLit);
+/** 雑居ビル: 細長く、各階に看板、屋上に広告塔。夜はネオンが光る */
+function mixedUseSprite(spec: BuildingSpec): { base: Sprite; emissive: Sprite | null } {
+  const st = spec.style;
+  const total = buildingFloors(spec.level, st);
+  const constructing = spec.state === BState.Constructing;
+  const abandoned = spec.state === BState.Abandoned;
+  const floors = constructing ? spec.floors : total;
+  const fh = 6;
+  const fw = 24;
+  const H = TILE_H + total * fh + 22;
+  const baseTop = H - TILE_H;
+  const r = new Raster(TILE_W, H);
+  const e = new Raster(TILE_W, H);
+  let anyLight = false;
+  const MIXED_WALLS: RGB[] = [[200, 200, 196], [216, 208, 192], [184, 188, 192], [228, 224, 216], [172, 168, 164]];
+  let wall: RGB = MIXED_WALLS[(st >> 1) % MIXED_WALLS.length];
+  if (abandoned) wall = mix(wall, [100, 100, 96], 0.55);
+  const wallL = wall;
+  const wallR = shade(wall, 0.72);
+  const roof: RGB = shade(wall, 0.85);
+  const x0 = HALF_W - fw / 2;
+  const x1 = HALF_W + fw / 2;
+  const wallH = floors * fh;
+  const signColor = (f: number, k: number) => SIGNS[Math.floor(hash3(st, f, k, 11) * SIGNS.length)];
+  const neonColor = (f: number, k: number) => NEON[Math.floor(hash3(st, f, k, 13) * NEON.length)];
+  const signLit = (f: number, k: number) => !abandoned && !constructing && hash3(spec.lights, f, k, 17) < 0.75;
+
+  for (let x = x0; x < x1; x++) {
+    const [ytR, ybR] = diamondRows(x, fw);
+    const yt = ytR + baseTop;
+    const yb = ybR + baseTop;
+    const left = x < HALF_W;
+    const along = left ? x - x0 : x1 - 1 - x;
+    const wc = left ? wallL : wallR;
+    for (let y = yb - wallH + 1; y <= yb; y++) r.set(x, y, wc);
+    for (let f = 0; f < floors; f++) {
+      const fTop = yb - (f + 1) * fh + 1;
+      if (!left) {
+        // 右壁: 各階の横看板 (上 2 行) と窓
+        if (along >= 1 && along < fw / 2 - 3 && hash3(st, f, 0, 23) < 0.7) {
+          const sc = shade(signColor(f, 0), 0.85);
+          const lit = signLit(f, 0);
+          r.set(x, fTop + 1, abandoned ? shade(sc, 0.5) : sc);
+          r.set(x, fTop + 2, abandoned ? shade(sc, 0.4) : shade(sc, 0.8));
+          if (lit && hash3(st, f, along, 19) < 0.85) {
+            e.set(x, fTop + 1, neonColor(f, 0));
+            e.set(x, fTop + 2, shade(neonColor(f, 0), 0.8));
+            anyLight = true;
+          }
+        }
+        if (along % 3 === 1 && along < fw / 2 - 3) {
+          const lit = !abandoned && !constructing && hash3(spec.lights, f, along, 2) < 0.5;
+          if (putWindow(r, e, x, fTop + 4, shade(PAL.windowDay, 0.8), lit ? PAL.windowLit : null)) anyLight = true;
+        }
+      } else {
+        // 左壁: 窓と、角の縦看板
+        if (along % 3 === 1 && along < fw / 2 - 4) {
+          const lit = !abandoned && !constructing && hash3(spec.lights, f, along, 1) < 0.5;
+          for (let wy = 2; wy <= 4; wy++) {
+            if (putWindow(r, e, x, fTop + wy, PAL.windowDay, lit ? PAL.windowLit : null)) anyLight = true;
+          }
+        }
+        if (along >= fw / 2 - 3 && along <= fw / 2 - 2) {
+          const sc = signColor(f, 1);
+          for (let wy = 1; wy <= 4; wy++) {
+            r.set(x, fTop + wy, abandoned ? shade(sc, 0.5) : wy === 1 ? shade(sc, 0.8) : sc);
+            if (signLit(f, 1)) {
+              e.set(x, fTop + wy, neonColor(0, 1));
               anyLight = true;
             }
           }
         }
       }
-      // 玄関 (左壁の1階)
-      if (left && (along === 2 || along === 3) && floors > 0 && level <= 3) {
-        for (let y = yb - 3; y <= yb; y++) r.set(x, y, shade(wc, 0.5));
-        if (!abandoned && !constructing && along === 2) {
+      // 1 階の入口
+      if (f === 0 && left && along >= 1 && along <= 2) {
+        for (let y = yb - 3; y <= yb; y++) r.set(x, y, shade(wc, 0.45));
+        if (!abandoned && !constructing) {
           e.set(x, yb - 3, PAL.windowLitWarm);
           anyLight = true;
         }
       }
-      // 看板 (商店)
-      if (level === 2 && !left && floors === total && along >= 1 && along < fw / 2 - 3) {
-        const top = yb - wallH + 1;
-        r.set(x, top + 1, sign);
-        r.set(x, top + 2, shade(sign, 0.8));
-      }
-      // 屋根
-      if (level === 1) {
-        // 切妻屋根: 棟は東西方向。列ごとに連続して塗る (持ち上げ量の差で穴が開かないように)
-        const ridgeH = 4;
-        let last = -1;
-        for (let y = yt - wallH; y <= yb - wallH; y++) {
-          const A = (x + 0.5 - HALF_W) / (fw / 2);
-          const B = (y + 0.5 - baseTop - HALF_H + wallH) / (fw / 4) + 1;
-          const v = (B - A) / 2;
-          const eh = Math.round(ridgeH * (1 - Math.abs(2 * v - 1)));
-          const target = y - eh;
-          const color = v < 0.5 ? roofLight : shade(roof, 0.8);
-          if (last >= 0) {
-            const lo = Math.min(last + 1, target);
-            const hi = Math.max(last - 1, target);
-            for (let yy = lo; yy <= hi; yy++) r.set(x, yy, color);
-          }
-          r.set(x, target, color);
-          last = target;
-        }
-        // 軒先の線
-        r.set(x, yb - wallH + 1, shade(roof, 0.6));
-      } else {
-        for (let y = yt - wallH; y <= yb - wallH; y++) {
-          const edge = y === yt - wallH || y === yb - wallH;
-          r.set(x, y, edge ? shade(roof, 0.75) : y === yt - wallH + 1 ? roofLight : roof);
-        }
-      }
-      // 壁の角の線
-      if (x === HALF_W && wallH > 0) r.vline(x, yb - wallH + 1, yb, shade(wallR, 0.85));
     }
-
-    // 煙突 (家)
-    if (level === 1 && !constructing) {
-      const cx = x0 + 5;
-      const [, ybR] = diamondRows(cx, fw);
-      const top = ybR + baseTop - wallH - 6;
-      r.fillRect(cx, top, 2, 4, [150, 90, 80]);
-      r.hline(cx, cx + 1, top, [110, 70, 60]);
+    // 屋根
+    for (let y = yt - wallH; y <= yb - wallH; y++) {
+      const edge = y === yt - wallH || y === yb - wallH;
+      r.set(x, y, edge ? shade(roof, 0.75) : roof);
     }
-    // 屋上設備 (中層)・アンテナ (高層)
-    if (!constructing && level === 3) {
-      drawRoofBox(r, baseTop - wallH, 10, 4, shade(wall, 0.95), shade(wall, 0.7), shade(roof, 0.85));
-    }
-    if (!constructing && level === 4) {
-      const topY = baseTop + HALF_H - 1 - wallH;
-      r.vline(HALF_W, topY - 7, topY - 1, PAL.railDark);
-      r.set(HALF_W, topY - 8, PAL.redLight);
-      e.set(HALF_W, topY - 8, PAL.redLight);
-      anyLight = true;
-    }
-    // 建設中: 足場とクレーン
-    if (constructing && floors < total) {
-      for (let x = x0; x < x1; x++) {
-        const [, ybR] = diamondRows(x, fw);
-        const yb = ybR + baseTop;
-        const top = yb - (floors + 1) * fh + 1;
-        for (let y = top; y <= yb - floors * fh; y++) {
-          const along = x < HALF_W ? x - x0 : x1 - 1 - x;
-          if (along % 3 === 0 || (y - top) % 3 === 0) r.set(x, y, PAL.scaffold);
-        }
-      }
-      if (level >= 2) {
-        const mx = HALF_W + 3;
-        const [, ybR] = diamondRows(mx, fw);
-        const base = ybR + baseTop - (floors + 1) * fh;
-        const top = base - 14;
-        for (let y = top; y <= base; y++) r.set(mx, y, (y - top) % 2 === 0 ? PAL.crane : PAL.craneDark);
-        r.hline(mx - 11, mx + 7, top, PAL.crane);
-        r.hline(mx - 11, mx - 8, top + 1, PAL.craneDark);
-        r.vline(mx + 5, top + 1, top + 6, PAL.railDark);
-        r.set(mx + 5, top + 7, PAL.craneDark);
-        r.set(mx, top - 1, PAL.redLight);
-        e.set(mx, top - 1, PAL.redLight);
+    if (x === HALF_W && wallH > 0) r.vline(x, yb - wallH + 1, yb, shade(wallR, 0.85));
+  }
+  if (!constructing) {
+    // 屋上: 階段室と広告塔
+    drawRoofBox(r, baseTop - wallH, 8, 3, shade(wall, 0.95), shade(wall, 0.7), shade(roof, 0.85), -4);
+    const bx = HALF_W + 2;
+    const [, ybR] = diamondRows(bx, fw);
+    const roofY = ybR + baseTop - wallH;
+    if (spec.level === 3 && (st & 0x20)) {
+      const panel = shade(SIGNS[(st >> 3) % SIGNS.length], 0.8);
+      r.vline(bx - 1, roofY - 5, roofY - 1, PAL.railDark);
+      r.vline(bx + 3, roofY - 5, roofY - 1, PAL.railDark);
+      r.fillRect(bx - 3, roofY - 9, 9, 4, abandoned ? shade(panel, 0.5) : panel);
+      r.fillRect(bx - 2, roofY - 8, 7, 2, abandoned ? shade(panel, 0.6) : shade(panel, 1.2));
+      if (!abandoned && hash2(spec.lights, st, 5) < 0.8) {
+        e.fillRect(bx - 3, roofY - 9, 9, 4, panel);
+        e.fillRect(bx - 2, roofY - 8, 7, 2, [255, 255, 240]);
         anyLight = true;
       }
     }
-    return { base: toSprite(r, 0, baseTop), emissive: anyLight ? toSprite(e, 0, baseTop) : null };
-  });
+  } else if (floors < total) {
+    drawScaffoldAndCrane(r, e, x0, x1, fw, baseTop, floors, fh, true);
+    anyLight = true;
+  }
+  return { base: toSprite(r, 0, baseTop), emissive: anyLight ? toSprite(e, 0, baseTop) : null };
 }
 
-function drawRoofBox(r: Raster, roofBaseTop: number, fw: number, h: number, wl: RGB, wr: RGB, top: RGB): void {
+/** 商店・アパート・中層・高層の箱型ビル */
+function boxBuildingSprite(spec: BuildingSpec): { base: Sprite; emissive: Sprite | null } {
+  const level = spec.level;
+  const fh = FLOOR_H[level];
+  const fw = FOOTPRINT[level];
+  const total = buildingFloors(level, spec.style);
+  const constructing = spec.state === BState.Constructing;
+  const abandoned = spec.state === BState.Abandoned;
+  const floors = constructing ? spec.floors : total;
+  const H = TILE_H + total * fh + 22;
+  const baseTop = H - TILE_H;
+  const r = new Raster(TILE_W, H);
+  const e = new Raster(TILE_W, H);
+  let anyLight = false;
+
+  const st = spec.style;
+  let wall: RGB = level === 4 ? TOWER_WALLS[st % TOWER_WALLS.length] : WALLS[st % WALLS.length];
+  let roof: RGB = level <= 2 ? ROOFS[(st >> 3) % ROOFS.length] : shade(wall, 0.9);
+  if (abandoned) {
+    wall = mix(wall, [110, 110, 104], 0.55);
+    roof = mix(roof, [90, 90, 90], 0.55);
+  }
+  const wallL = wall;
+  const wallR = shade(wall, 0.72);
+  const roofLight = shade(roof, 1.1);
+  const sign = SIGNS[(st >> 2) % SIGNS.length];
+  const wallH = floors * fh;
   const x0 = HALF_W - fw / 2;
   const x1 = HALF_W + fw / 2;
+  const windowRows = fh - 3;
+
   for (let x = x0; x < x1; x++) {
     const [ytR, ybR] = diamondRows(x, fw);
+    const yt = ytR + baseTop;
+    const yb = ybR + baseTop;
+    const left = x < HALF_W;
+    const along = left ? x - x0 : x1 - 1 - x;
+    const wc = left ? wallL : wallR;
+    for (let y = yb - wallH + 1; y <= yb; y++) r.set(x, y, wc);
+    const windowCol = level === 4 ? along % 3 !== 0 : along % 4 === 1 || along % 4 === 2;
+    if (windowCol && along < fw / 2 - 2) {
+      for (let f = 0; f < floors; f++) {
+        const fTop = yb - (f + 1) * fh + 1;
+        const lit = !abandoned && !constructing && hash3(spec.lights, f, along >> 2, left ? 1 : 2) < 0.62;
+        const boarded = abandoned && hash3(st, f, along >> 2, 7) < 0.5;
+        const warm = hash3(spec.lights, f, along >> 2, 3) < 0.7;
+        for (let wy = 1; wy <= windowRows; wy++) {
+          const y = fTop + wy;
+          const day: RGB = boarded ? shade(PAL.dirtDark, 0.8) : abandoned ? [60, 60, 64] : shade(PAL.windowDay, left ? 1 : 0.8);
+          if (putWindow(r, e, x, y, day, lit ? (warm ? PAL.windowLitWarm : level === 4 ? PAL.windowLitCool : PAL.windowLit) : null)) anyLight = true;
+        }
+      }
+    }
+    if (left && (along === 2 || along === 3) && floors > 0 && level <= 3) {
+      for (let y = yb - 3; y <= yb; y++) r.set(x, y, shade(wc, 0.5));
+      if (!abandoned && !constructing && along === 2) {
+        e.set(x, yb - 3, PAL.windowLitWarm);
+        anyLight = true;
+      }
+    }
+    if (level === 2 && !left && floors === total && along >= 1 && along < fw / 2 - 3) {
+      const top = yb - wallH + 1;
+      r.set(x, top + 1, sign);
+      r.set(x, top + 2, shade(sign, 0.8));
+    }
+    for (let y = yt - wallH; y <= yb - wallH; y++) {
+      const edge = y === yt - wallH || y === yb - wallH;
+      r.set(x, y, edge ? shade(roof, 0.75) : y === yt - wallH + 1 ? roofLight : roof);
+    }
+    if (x === HALF_W && wallH > 0) r.vline(x, yb - wallH + 1, yb, shade(wallR, 0.85));
+  }
+  if (!constructing && level === 3) {
+    drawRoofBox(r, baseTop - wallH, 10, 4, shade(wall, 0.95), shade(wall, 0.7), shade(roof, 0.85));
+  }
+  if (!constructing && level === 4) {
+    const topY = baseTop + HALF_H - 1 - wallH;
+    r.vline(HALF_W, topY - 7, topY - 1, PAL.railDark);
+    r.set(HALF_W, topY - 8, PAL.redLight);
+    e.set(HALF_W, topY - 8, PAL.redLight);
+    anyLight = true;
+  }
+  if (constructing && floors < total) {
+    drawScaffoldAndCrane(r, e, x0, x1, fw, baseTop, floors, fh, level >= 2);
+    if (level >= 2) anyLight = true;
+  }
+  return { base: toSprite(r, 0, baseTop), emissive: anyLight ? toSprite(e, 0, baseTop) : null };
+}
+
+function drawScaffoldAndCrane(r: Raster, e: Raster, x0: number, x1: number, fw: number, baseTop: number, floors: number, fh: number, crane: boolean): void {
+  for (let x = x0; x < x1; x++) {
+    const [, ybR] = diamondRows(x, fw);
+    const yb = ybR + baseTop;
+    const top = yb - (floors + 1) * fh + 1;
+    for (let y = top; y <= yb - floors * fh; y++) {
+      const along = x < HALF_W ? x - x0 : x1 - 1 - x;
+      if (along % 3 === 0 || (y - top) % 3 === 0) r.set(x, y, PAL.scaffold);
+    }
+  }
+  if (!crane) return;
+  const mx = HALF_W + 3;
+  const [, ybR] = diamondRows(mx, fw);
+  const base = ybR + baseTop - (floors + 1) * fh;
+  const top = base - 14;
+  for (let y = top; y <= base; y++) r.set(mx, y, (y - top) % 2 === 0 ? PAL.crane : PAL.craneDark);
+  r.hline(mx - 11, mx + 7, top, PAL.crane);
+  r.hline(mx - 11, mx - 8, top + 1, PAL.craneDark);
+  r.vline(mx + 5, top + 1, top + 6, PAL.railDark);
+  r.set(mx + 5, top + 7, PAL.craneDark);
+  r.set(mx, top - 1, PAL.redLight);
+  e.set(mx, top - 1, PAL.redLight);
+}
+
+function drawRoofBox(r: Raster, roofBaseTop: number, fw: number, h: number, wl: RGB, wr: RGB, top: RGB, dx = 0): void {
+  const x0 = HALF_W - fw / 2 + dx;
+  const x1 = HALF_W + fw / 2 + dx;
+  for (let x = x0; x < x1; x++) {
+    const [ytR, ybR] = diamondRows(x, fw, HALF_W + dx);
     const yt = ytR + roofBaseTop;
     const yb = ybR + roofBaseTop;
-    for (let y = yb - h + 1; y <= yb; y++) r.set(x, y, x < HALF_W ? wl : wr);
+    for (let y = yb - h + 1; y <= yb; y++) r.set(x, y, x < HALF_W + dx ? wl : wr);
     for (let y = yt - h; y <= yb - h; y++) r.set(x, y, top);
   }
 }

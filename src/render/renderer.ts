@@ -85,7 +85,8 @@ export class TilePainter {
     else if (k === Kind.Lot) ground = w.lotTimer[i] < 20 ? "rubble" : "lot";
     else if (k === Kind.Park) ground = "park";
     else if (k === Kind.Building) ground = w.bLevel[i] >= 2 ? "concrete" : "grass";
-    this.blit(groundSprite(ground, rel, variant, this.season), px, py);
+    else if (k === Kind.Farm) ground = (w.bStyle[i] & 1) === 0 ? "paddy" : "field";
+    this.blit(groundSprite(ground, rel, k === Kind.Farm ? w.bStyle[i] & 3 : variant, this.season), px, py);
 
     // マップの縁の断面
     if (x === w.w - 1 || y === w.h - 1) this.drawEdgeFace(x, y, px, py, rel);

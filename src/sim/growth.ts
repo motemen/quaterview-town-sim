@@ -262,8 +262,8 @@ export function roadExtension(w: World, x: number, y: number, dir: number): { ti
 
 function growRoads(w: World): void {
   const { roads, buildings } = countKinds(w);
-  let perDay = Math.min(4, 0.7 + buildings / 30);
-  if (roads > buildings * 1.3 + 14) perDay *= 0.2;
+  let perDay = Math.min(3, 0.6 + buildings / 40);
+  if (roads > buildings * 1.0 + 16) perDay *= 0.3;
   let attempts = Math.floor(perDay / 24);
   if (w.rng.chance(perDay / 24 - attempts)) attempts++;
   for (let a = 0; a < attempts; a++) extendRoadOnce(w);
@@ -286,10 +286,10 @@ function extendRoadOnce(w: World): void {
         let weight = 1 + w.value[last] / 16;
         const oppositeBit = [DIR_S, DIR_W, DIR_N, DIR_E][d];
         const straight = (conn & oppositeBit) !== 0;
-        if (straight && degree === 1) weight *= 4; // 行き止まりの先へまっすぐ
-        else if (straight) weight *= 1.2; // 十字路・T字路から直進
-        else if (degree === 2 && (conn === (DIR_N | DIR_S) || conn === (DIR_E | DIR_W))) weight *= 0.35; // 直線道路からの枝分かれ
-        else weight *= 0.8;
+        if (straight && degree === 1) weight *= 8; // 行き止まりの先へまっすぐ
+        else if (straight) weight *= 1.5; // 十字路・T字路から直進
+        else if (degree === 2 && (conn === (DIR_N | DIR_S) || conn === (DIR_E | DIR_W))) weight *= 0.12; // 直線道路からの枝分かれ
+        else weight *= 0.3; // 曲がる
         if (ext.tiles.length > 1) weight *= 0.5; // 橋・踏切はやや珍しい
         // 2マス隣に平行な道路があると街区が狭すぎるので抑える
         const lx = last % w.w;
@@ -297,9 +297,14 @@ function extendRoadOnce(w: World): void {
         const px = d === 0 || d === 2 ? 2 : 0;
         const py = d === 1 || d === 3 ? 2 : 0;
         for (const sgn of [-1, 1]) {
-          const qx = lx + px * sgn;
-          const qy = ly + py * sgn;
-          if (inBounds(w, qx, qy) && w.kind[idx(w, qx, qy)] === Kind.Road) weight *= 0.2;
+          for (const [dist, pen] of [
+            [2, 0.04],
+            [3, 0.3],
+          ] as const) {
+            const qx = lx + (px / 2) * dist * sgn;
+            const qy = ly + (py / 2) * dist * sgn;
+            if (inBounds(w, qx, qy) && w.kind[idx(w, qx, qy)] === Kind.Road) weight *= pen;
+          }
         }
         if (w.kind[last] === Kind.Forest) weight *= 0.7;
         candidates.push({ tiles: ext.tiles, kinds: ext.kinds, weight });
@@ -357,6 +362,26 @@ function growBuildings(w: World): void {
       }
       if (!isBuildableGround(k)) continue;
       if (!isFlat(w, x, y)) continue;
+      // 田舎では田畑が広がる
+      if (k === Kind.Grass && w.value[i] < 22) {
+        let farmStyle = -1;
+        let farms = 0;
+        for (let d = 0; d < 4; d++) {
+          const nx = x + DX[d];
+          const ny = y + DY[d];
+          if (!inBounds(w, nx, ny)) continue;
+          const j = idx(w, nx, ny);
+          if (w.kind[j] === Kind.Farm) {
+            farms++;
+            farmStyle = w.bStyle[j];
+          }
+        }
+        if (farms >= 2 && w.rng.chance(0.08 / 24)) {
+          w.kind[i] = Kind.Farm;
+          w.bStyle[i] = farmStyle;
+          continue;
+        }
+      }
       // 道路までの距離 (1 = 隣接, 2 = 1マス挟む)
       let roadDist = 0;
       for (let d = 0; d < 4 && roadDist !== 1; d++) {
@@ -378,10 +403,11 @@ function growBuildings(w: World): void {
         continue;
       }
       const v = w.value[i];
-      let pDay = Math.pow(v / 100, 2) * 0.6;
+      let pDay = Math.pow(v / 100, 2) * 0.45;
       if (roadDist === 2) pDay *= 0.4;
       if (k === Kind.Lot) pDay *= 3;
       if (k === Kind.Forest) pDay *= 0.6;
+      if (k === Kind.Farm) pDay *= 0.5;
       if (v < 8) pDay = 0;
       if (w.rng.chance(pDay / 24)) {
         startConstruction(w, i, v);
@@ -459,9 +485,23 @@ function demolish(w: World, i: number): void {
   w.lotTimer[i] = 0;
 }
 
+/** 雑居ビルか (レベル 2・3 のスタイルで決まる) */
+export function isMixedUse(level: number, style: number): boolean {
+  return (level === 2 || level === 3) && (style & 0xc0) === 0xc0;
+}
+
+/** 建物の階数 (レベルとスタイルで決まる) */
+export function buildingFloors(level: number, style: number): number {
+  if (level === 1) return (style >> 7) & 1 ? 2 : 1;
+  if (level === 2) return isMixedUse(level, style) ? 3 : 2;
+  if (level === 3) return isMixedUse(level, style) ? 6 : 5;
+  if (level === 4) return 9 + (style & 3) * 2;
+  return LEVEL_FLOORS[level] ?? 1;
+}
+
 /** 建物の見た目上の階数 (建設中は進捗に応じて) */
 export function visibleFloors(w: World, i: number): number {
-  const total = LEVEL_FLOORS[w.bLevel[i]];
+  const total = buildingFloors(w.bLevel[i], w.bStyle[i]);
   if (w.bState[i] !== BState.Constructing) return total;
   return Math.min(total, Math.floor((w.bProgress[i] / 255) * (total + 1)));
 }

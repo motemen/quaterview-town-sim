@@ -16,6 +16,8 @@ export const enum Kind {
   Building = 7,
   Lot = 8,
   Park = 9,
+  /** 田畑。bStyle の下位ビットが種類 (0=田 1=畑) */
+  Farm = 10,
 }
 
 export const enum BState {
@@ -212,5 +214,5 @@ export function roadConnections(w: World, x: number, y: number): number {
 }
 
 export function isBuildableGround(k: number): boolean {
-  return k === Kind.Grass || k === Kind.Forest || k === Kind.Lot;
+  return k === Kind.Grass || k === Kind.Forest || k === Kind.Lot || k === Kind.Farm;
 }
