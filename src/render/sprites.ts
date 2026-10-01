@@ -501,3 +501,133 @@ function drawRoofBox(r: Raster, roofBaseTop: number, fw: number, h: number, wl: 
 }
 
 export const BUILDING_TOTAL_FLOORS = TOTAL_FLOORS;
+
+// ---------------------------------------------------------------------------
+// 列車・踏切
+
+/**
+ * タイル内座標の矩形 [u0,u1]×[v0,v1] を高さ h で押し出した箱を描く。
+ * baseTop はラスタ内でタイルのダイヤが始まる行。
+ */
+function isoBox(
+  r: Raster,
+  u0: number,
+  v0: number,
+  u1: number,
+  v1: number,
+  h: number,
+  baseTop: number,
+  colors: { top: RGB; sw: RGB; se: RGB },
+  sidePixel?: (x: number, y: number, side: "sw" | "se", u: number, v: number, k: number) => RGB | null,
+): void {
+  const ground: [number, number, number, number][] = [];
+  forEachDiamondPixel((x, y, u, v) => {
+    if (u >= u0 && u <= u1 && v >= v0 && v <= v1) ground.push([x, y + baseTop, u, v]);
+  });
+  ground.sort((a, b) => a[1] - b[1]);
+  for (const [x, y, u, v] of ground) {
+    const side: "sw" | "se" = v1 - v < u1 - u ? "sw" : "se";
+    const base = side === "sw" ? colors.sw : colors.se;
+    for (let k = 1; k <= h; k++) {
+      const c = sidePixel ? (sidePixel(x, y - k, side, u, v, k) ?? base) : base;
+      r.set(x, y - k, c);
+    }
+  }
+  for (const [x, y] of ground) r.set(x, y - h, colors.top);
+}
+
+export interface CarSpriteSpec {
+  axis: "x" | "y";
+  facing: 1 | -1;
+  kind: "head" | "mid" | "tail";
+}
+
+/** 車両。タイル中心を (16, 24) に置いた 32x32 のラスタ (ox=16, oy=24)。 */
+export function carSprite(spec: CarSpriteSpec): { base: Sprite; emissive: Sprite | null } {
+  const key = `car:${spec.axis}:${spec.facing}:${spec.kind}`;
+  return pairCache.get(key, () => {
+    const r = new Raster(32, 32);
+    const e = new Raster(32, 32);
+    const baseTop = 16;
+    const half = 0.4;
+    const wid = 0.15;
+    const [u0, u1, v0, v1] = spec.axis === "x" ? [0.5 - half, 0.5 + half, 0.5 - wid, 0.5 + wid] : [0.5 - wid, 0.5 + wid, 0.5 - half, 0.5 + half];
+    const body: RGB = [236, 232, 216];
+    const stripe: RGB = [48, 96, 192];
+    const H = 7;
+    // 前端が見える側か: 東向き (x軸 +1) なら前端は u1 側 (SE面)、南向き (y軸 +1) なら v1 側 (SW面)
+    const frontVisible = spec.facing === 1;
+    const front = spec.kind === "head";
+    const back = spec.kind === "tail";
+    isoBox(r, u0, v0, u1, v1, H, baseTop, { top: [120, 124, 132], sw: body, se: shade(body, 0.75) }, (_x, _y, side, u, v, k) => {
+      const longSide = spec.axis === "x" ? side === "sw" : side === "se";
+      const along = spec.axis === "x" ? u - u0 : v - v0;
+      if (k === 2) return side === "sw" ? stripe : shade(stripe, 0.75);
+      if (longSide && (k === 4 || k === 5)) {
+        const w = (along / (2 * half)) * 7;
+        if (w % 1 < 0.55 && w > 0.4 && w < 6.6) return side === "sw" ? PAL.windowDay : shade(PAL.windowDay, 0.8);
+      }
+      if (!longSide && front && frontVisible && k === 3) return PAL.windowDay;
+      return null;
+    });
+    // 前照灯・尾灯 (見える端面の下のほう)
+    const endSide: "sw" | "se" = spec.axis === "x" ? "se" : "sw";
+    const endU = spec.axis === "x" ? u1 : 0.5;
+    const endV = spec.axis === "x" ? 0.5 : v1;
+    const [ex, ey] = uvToPixel(endU, endV);
+    const lx = Math.floor(ex);
+    const ly = Math.floor(ey) + baseTop - 2;
+    void endSide;
+    if (frontVisible && front) {
+      e.set(lx - 1, ly, PAL.lamp);
+      e.set(lx + 1, ly, PAL.lamp);
+      r.set(lx - 1, ly, [255, 250, 200]);
+      r.set(lx + 1, ly, [255, 250, 200]);
+    } else if (!frontVisible && back) {
+      e.set(lx - 1, ly, PAL.redLight);
+      e.set(lx + 1, ly, PAL.redLight);
+      r.set(lx - 1, ly, [200, 60, 50]);
+      r.set(lx + 1, ly, [200, 60, 50]);
+    }
+    // 窓明かり
+    for (let y = 0; y < 32; y++) {
+      for (let x = 0; x < 32; x++) {
+        const i = (y * 32 + x) * 4;
+        const d = r.data;
+        if (d[i + 3] && d[i] === PAL.windowDay[0] && d[i + 1] === PAL.windowDay[1] && d[i + 2] === PAL.windowDay[2]) {
+          e.set(x, y, PAL.windowLit);
+        }
+      }
+    }
+    return { base: toSprite(r, 16, 24), emissive: toSprite(e, 16, 24) };
+  });
+}
+
+/** 踏切の遮断機 (降りた状態) と警報灯。railAlongX は線路が東西方向か。 */
+export function gateSprite(railAlongX: boolean, lit: boolean): { base: Sprite; emissive: Sprite | null } {
+  return pairCache.get(`gate:${railAlongX ? 1 : 0}:${lit ? 1 : 0}`, () => {
+    const r = new Raster(32, 24);
+    const e = new Raster(32, 24);
+    const DY = 8;
+    // 線路の両側、道路の上に横たわる棒
+    for (const side of [-1, 1]) {
+      const off = 0.5 + side * 0.3;
+      const [a0, a1] = [0.26, 0.74];
+      for (let t = 0; t <= 1; t += 0.03) {
+        const u = railAlongX ? a0 + (a1 - a0) * t : off;
+        const v = railAlongX ? off : a0 + (a1 - a0) * t;
+        const [px, py] = uvToPixel(u, v);
+        const stripe = Math.floor(t * 8) % 2 === 0;
+        r.set(Math.floor(px), Math.floor(py) + DY - 4, stripe ? ([240, 240, 240] as RGB) : ([220, 60, 50] as RGB));
+      }
+      // 支柱と警報灯
+      const [px, py] = railAlongX ? uvToPixel(0.24, off) : uvToPixel(off, 0.24);
+      const sx = Math.floor(px);
+      const sy = Math.floor(py) + DY;
+      r.vline(sx, sy - 7, sy, PAL.railDark);
+      r.set(sx, sy - 8, lit ? PAL.redLight : ([120, 40, 40] as RGB));
+      if (lit) e.set(sx, sy - 8, PAL.redLight);
+    }
+    return { base: toSprite(r, 0, DY), emissive: lit ? toSprite(e, 0, DY) : null };
+  });
+}

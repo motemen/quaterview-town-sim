@@ -73,6 +73,8 @@ export interface World {
   lastHour: number;
   /** ニュース等の通知 */
   events: string[];
+  /** 駅が増えたことを描画側に知らせるフラグ */
+  stationsChanged: boolean;
 }
 
 export function createEmptyWorld(seed: number, w = MAP_W, h = MAP_H): World {
@@ -99,6 +101,7 @@ export function createEmptyWorld(seed: number, w = MAP_W, h = MAP_H): World {
     population: 0,
     lastHour: Math.floor(START_MINUTES / 60),
     events: [],
+    stationsChanged: false,
   };
 }
 

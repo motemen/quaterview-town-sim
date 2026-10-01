@@ -1,4 +1,5 @@
 import { fbm } from "./rng";
+import { maybeOpenStation } from "./rail";
 import {
   BState,
   DX,
@@ -40,6 +41,7 @@ export function levelForValue(v: number): number {
 /** 1ゲーム時間ごとに呼ぶ。hour は 0..23。 */
 export function hourlyStep(w: World, hour: number, totalDays: number): void {
   if (hour === 0) {
+    if (totalDays % 10 === 0 && maybeOpenStation(w)) w.stationsChanged = true;
     computeLandValue(w, totalDays);
     dailyAging(w);
     computePopulation(w);

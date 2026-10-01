@@ -1,4 +1,5 @@
-import { MapLayer } from "./render/renderer";
+import { DynamicLayer, MapLayer } from "./render/renderer";
+import { TrainSystem } from "./sim/trains";
 import { hashString } from "./sim/rng";
 import { SAVE_KEY, deserialize, serialize } from "./sim/save";
 import { advance, newWorld } from "./sim/sim";
@@ -67,6 +68,8 @@ function save(world: World): void {
 
 let world = loadWorld();
 let layer = new MapLayer(world);
+let trains = new TrainSystem(world);
+const dyn = new DynamicLayer();
 const cam = new Camera(canvas);
 let speed = 1;
 
@@ -96,6 +99,12 @@ resize();
   cam.centerOnTile(st ? st.x : world.w / 2, st ? st.y : world.h / 2);
 }
 
+{
+  // デバッグ用: ?train=N で駅から N タイル西に列車を置く
+  const tp = new URLSearchParams(location.search).get("train");
+  if (tp !== null && trains.stations.length) trains.spawnAt(trains.stations[0] - Number(tp), 1, 60);
+}
+
 attachInput(canvas, cam, {
   onClick(cx, cy) {
     const t = cam.pick(world, cx, cy);
@@ -116,6 +125,11 @@ function frame(now: number): void {
     lastHour = world.lastHour;
     layer.invalidate();
   }
+  if (world.stationsChanged) {
+    world.stationsChanged = false;
+    trains.refresh(world);
+  }
+  trains.update(world, dt, speed);
   cam.clampTo(world);
   draw();
   hud.update(world);
@@ -147,6 +161,11 @@ function draw(): void {
   ctx.setTransform(z, 0, 0, z, ox, oy);
   ctx.drawImage(layer.canvas, -layer.originX, -layer.originY);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
+  // 列車など動くもの
+  dyn.render(world, trains, cam.viewW, cam.viewH, cam.x, cam.y);
+  ctx.setTransform(z, 0, 0, z, 0, 0);
+  ctx.drawImage(dyn.canvas, 0, 0);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
   // 昼夜の色
   const tint = tintColor(hour, season);
   ctx.globalCompositeOperation = "multiply";
@@ -159,6 +178,8 @@ function draw(): void {
     ctx.globalAlpha = Math.min(1, night * 1.2);
     ctx.setTransform(z, 0, 0, z, ox, oy);
     ctx.drawImage(layer.emissive, -layer.originX, -layer.originY);
+    ctx.setTransform(z, 0, 0, z, 0, 0);
+    ctx.drawImage(dyn.emissive, 0, 0);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1;
   }
@@ -180,7 +201,9 @@ Object.assign(window as unknown as Record<string, unknown>, {
     set world(w: World) {
       world = w;
       layer = new MapLayer(world);
+      trains = new TrainSystem(world);
     },
+    trains: () => trains,
     layer: () => layer,
     cam,
     fps: () => fpsAcc,

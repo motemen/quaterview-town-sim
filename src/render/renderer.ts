@@ -1,13 +1,16 @@
 import { visibleFloors } from "../sim/growth";
 import { hash2 } from "../sim/rng";
-import { BState, Kind, Slope, World, cornerHeights, idx, railConnections, roadConnections, DIR_E, DIR_W } from "../sim/world";
+import { CarPose, TrainSystem } from "../sim/trains";
+import { BState, Kind, World, cornerHeights, idx, inBounds, railConnections, roadConnections, DIR_E, DIR_W } from "../sim/world";
 import { HALF_H, HALF_W, LEVEL_H, TILE_H, TILE_W, heightAt, tileOrigin, uvToPixel } from "./iso";
 import { PAL } from "./palette";
 import { Sprite } from "./raster";
 import {
   GroundKind,
   buildingSprite,
+  carSprite,
   crossingSprite,
+  gateSprite,
   groundSprite,
   railSprite,
   roadEmissive,
@@ -16,55 +19,24 @@ import {
   treeSprite,
 } from "./sprites";
 
-/** マップ全体を 1 枚の静的レイヤーとして描き、更新があったときだけ描き直す。 */
-export class MapLayer {
-  readonly canvas: HTMLCanvasElement;
-  readonly emissive: HTMLCanvasElement;
-  private ctx: CanvasRenderingContext2D;
-  private ectx: CanvasRenderingContext2D;
-  /** ワールド座標 (タイル原点系) → キャンバス座標のオフセット */
-  readonly originX: number;
-  readonly originY: number;
-  dirty = true;
+/**
+ * タイルを「本体」と「発光」の 2 つのキャンバスに描く。
+ * 発光キャンバスには、本体を描くたびに同じ形で消去 (destination-out) して遮蔽を表現する。
+ */
+export class TilePainter {
   /** 季節による木の色 (0=緑 1=桜 2=紅葉 3=雪) */
   treeTint = 0;
 
-  constructor(readonly world: World) {
-    this.originX = (world.h - 1) * HALF_W;
-    this.originY = 3 * LEVEL_H + 96;
-    const w = (world.w + world.h) * HALF_W;
-    const h = (world.w + world.h) * HALF_H + this.originY + 40;
-    this.canvas = document.createElement("canvas");
-    this.canvas.width = w;
-    this.canvas.height = h;
-    this.emissive = document.createElement("canvas");
-    this.emissive.width = w;
-    this.emissive.height = h;
-    this.ctx = this.canvas.getContext("2d")!;
-    this.ectx = this.emissive.getContext("2d")!;
-    this.ctx.imageSmoothingEnabled = false;
-    this.ectx.imageSmoothingEnabled = false;
-  }
+  constructor(
+    readonly world: World,
+    readonly ctx: CanvasRenderingContext2D,
+    readonly ectx: CanvasRenderingContext2D,
+    /** ワールド座標 (タイル原点系) → キャンバス座標のオフセット */
+    public originX: number,
+    public originY: number,
+  ) {}
 
-  invalidate(): void {
-    this.dirty = true;
-  }
-
-  render(): void {
-    if (!this.dirty) return;
-    this.dirty = false;
-    const w = this.world;
-    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-    this.ectx.clearRect(0, 0, this.emissive.width, this.emissive.height);
-    for (let y = 0; y < w.h; y++) {
-      for (let x = 0; x < w.w; x++) {
-        this.drawTile(x, y);
-      }
-    }
-  }
-
-  /** スプライトを両方のレイヤーに描く (発光レイヤーには遮蔽として) */
-  private blit(s: Sprite, px: number, py: number, rel?: readonly [number, number, number, number]): void {
+  blit(s: Sprite, px: number, py: number, rel?: readonly [number, number, number, number]): void {
     if (rel && (rel[0] | rel[1] | rel[2] | rel[3]) !== 0) {
       const t = shearTransform(px, py, s.oy, rel);
       this.ctx.setTransform(t[0], t[1], t[2], t[3], t[4], t[5]);
@@ -83,20 +55,26 @@ export class MapLayer {
     this.ectx.globalCompositeOperation = "source-over";
   }
 
-  private blitEmissive(s: Sprite, px: number, py: number): void {
+  blitEmissive(s: Sprite, px: number, py: number): void {
     this.ectx.drawImage(s.canvas, px - s.ox, py - s.oy);
   }
 
-  private drawTile(x: number, y: number): void {
+  /** タイル (x,y) の描画原点 (高さ 0 の平面上) */
+  tileScreen(x: number, y: number): [number, number] {
+    const [ox0, oy0] = tileOrigin(x, y);
+    return [ox0 + this.originX, oy0 + this.originY];
+  }
+
+  drawTile(x: number, y: number, activeCrossings?: Set<number>, blinkOn = false): void {
     const w = this.world;
     const i = idx(w, x, y);
     const k = w.kind[i];
     const c = cornerHeights(w, x, y);
     const hmin = Math.min(c[0], c[1], c[2], c[3]);
     const rel = [c[0] - hmin, c[1] - hmin, c[2] - hmin, c[3] - hmin] as const;
-    const [ox0, oy0] = tileOrigin(x, y);
-    const px = ox0 + this.originX;
-    const py = oy0 + this.originY - hmin * LEVEL_H;
+    const [px0, py0] = this.tileScreen(x, y);
+    const px = px0;
+    const py = py0 - hmin * LEVEL_H;
     const variant = Math.floor(hash2(w.seed, x, y) * 8);
     const water = w.water[i] === 1;
 
@@ -141,9 +119,16 @@ export class MapLayer {
       case Kind.Rail:
         this.blit(railSprite(railConnections(w, x, y), water), px, py, rel);
         break;
-      case Kind.Crossing:
-        this.blit(crossingSprite(railConnections(w, x, y), roadConnections(w, x, y)), px, py, rel);
+      case Kind.Crossing: {
+        const rm = railConnections(w, x, y);
+        this.blit(crossingSprite(rm, roadConnections(w, x, y)), px, py, rel);
+        if (activeCrossings?.has(i)) {
+          const g = gateSprite((rm & (DIR_E | DIR_W)) !== 0, blinkOn);
+          this.blit(g.base, px, py);
+          if (g.emissive) this.blitEmissive(g.emissive, px, py);
+        }
         break;
+      }
       case Kind.Station: {
         const st = w.stations.find((s) => s.x === x && s.y === y);
         const sp = stationSprite(st ? st.plazaDir : 2);
@@ -168,6 +153,28 @@ export class MapLayer {
     }
   }
 
+  /** 車両の中心 (地面) の画面座標 */
+  carScreen(pose: CarPose): [number, number] {
+    const w = this.world;
+    const tx = Math.max(0, Math.min(w.w - 1, Math.floor(pose.tx + 0.5)));
+    const ty = Math.max(0, Math.min(w.h - 1, Math.floor(pose.ty + 0.5)));
+    const c = cornerHeights(w, tx, ty);
+    const u = pose.tx - tx + 0.5;
+    const v = pose.ty - ty + 0.5;
+    const h = heightAt(c, u, v) * LEVEL_H;
+    const [sx, sy] = this.tileScreen(tx, ty);
+    const [lx, ly] = uvToPixel(u, v);
+    return [Math.round(sx + lx), Math.round(sy + ly - h)];
+  }
+
+  /** 車両を描く。位置はタイル座標 (小数)。 */
+  drawCar(pose: CarPose): void {
+    const [cx, cy] = this.carScreen(pose);
+    const sp = carSprite({ axis: pose.axis, facing: pose.facing, kind: pose.kind });
+    this.blit(sp.base, cx, cy);
+    if (sp.emissive) this.blitEmissive(sp.emissive, cx, cy);
+  }
+
   private drawTree(px: number, py: number, rel: readonly [number, number, number, number], u: number, v: number, variant: number): void {
     const [lx, ly] = uvToPixel(u, v);
     const h = heightAt(rel, u, v) * LEVEL_H;
@@ -177,36 +184,176 @@ export class MapLayer {
   private drawEdgeFace(x: number, y: number, px: number, py: number, rel: readonly [number, number, number, number]): void {
     const w = this.world;
     const depth = 26;
-    const T: [number, number] = [px + HALF_W, py - rel[0] * LEVEL_H];
     const R: [number, number] = [px + TILE_W, py + HALF_H - rel[1] * LEVEL_H];
     const B: [number, number] = [px + HALF_W, py + TILE_H - rel[2] * LEVEL_H];
     const L: [number, number] = [px, py + HALF_H - rel[3] * LEVEL_H];
     const base = py + TILE_H + depth;
-    void T;
-    const ctx = this.ctx;
     const face = (a: [number, number], b: [number, number], color: string) => {
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.moveTo(a[0], a[1]);
-      ctx.lineTo(b[0], b[1]);
-      ctx.lineTo(b[0], base);
-      ctx.lineTo(a[0], base);
-      ctx.closePath();
-      ctx.fill();
-      // 発光レイヤーでは遮蔽
-      this.ectx.globalCompositeOperation = "destination-out";
-      this.ectx.beginPath();
-      this.ectx.moveTo(a[0], a[1]);
-      this.ectx.lineTo(b[0], b[1]);
-      this.ectx.lineTo(b[0], base);
-      this.ectx.lineTo(a[0], base);
-      this.ectx.closePath();
-      this.ectx.fill();
-      this.ectx.globalCompositeOperation = "source-over";
+      for (const [c, erase] of [
+        [this.ctx, false],
+        [this.ectx, true],
+      ] as const) {
+        c.globalCompositeOperation = erase ? "destination-out" : "source-over";
+        c.fillStyle = color;
+        c.beginPath();
+        c.moveTo(a[0], a[1]);
+        c.lineTo(b[0], b[1]);
+        c.lineTo(b[0], base);
+        c.lineTo(a[0], base);
+        c.closePath();
+        c.fill();
+        c.globalCompositeOperation = "source-over";
+      }
     };
     const rgb = (c: readonly number[]) => `rgb(${c[0]},${c[1]},${c[2]})`;
     if (y === w.h - 1) face(L, B, rgb(PAL.earth));
     if (x === w.w - 1) face(B, R, rgb(PAL.earthDark));
+  }
+}
+
+/** マップ全体を 1 枚の静的レイヤーとして描き、更新があったときだけ描き直す。 */
+export class MapLayer {
+  readonly canvas: HTMLCanvasElement;
+  readonly emissive: HTMLCanvasElement;
+  readonly painter: TilePainter;
+  readonly originX: number;
+  readonly originY: number;
+  dirty = true;
+
+  constructor(readonly world: World) {
+    this.originX = (world.h - 1) * HALF_W;
+    this.originY = 3 * LEVEL_H + 96;
+    const w = (world.w + world.h) * HALF_W;
+    const h = (world.w + world.h) * HALF_H + this.originY + 40;
+    this.canvas = document.createElement("canvas");
+    this.canvas.width = w;
+    this.canvas.height = h;
+    this.emissive = document.createElement("canvas");
+    this.emissive.width = w;
+    this.emissive.height = h;
+    const ctx = this.canvas.getContext("2d")!;
+    const ectx = this.emissive.getContext("2d")!;
+    ctx.imageSmoothingEnabled = false;
+    ectx.imageSmoothingEnabled = false;
+    this.painter = new TilePainter(world, ctx, ectx, this.originX, this.originY);
+  }
+
+  invalidate(): void {
+    this.dirty = true;
+  }
+
+  render(): void {
+    if (!this.dirty) return;
+    this.dirty = false;
+    const w = this.world;
+    this.painter.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    this.painter.ectx.clearRect(0, 0, this.emissive.width, this.emissive.height);
+    for (let y = 0; y < w.h; y++) {
+      for (let x = 0; x < w.w; x++) {
+        this.painter.drawTile(x, y);
+      }
+    }
+  }
+}
+
+/**
+ * 毎フレーム描き直す動的レイヤー (列車・踏切)。ビューポートと同じ大きさ。
+ * 列車の手前にあるタイルを描き直して、建物の陰に隠れるようにする。
+ */
+export class DynamicLayer {
+  readonly canvas: HTMLCanvasElement;
+  readonly emissive: HTMLCanvasElement;
+  private ctx: CanvasRenderingContext2D;
+  private ectx: CanvasRenderingContext2D;
+
+  constructor() {
+    this.canvas = document.createElement("canvas");
+    this.emissive = document.createElement("canvas");
+    this.ctx = this.canvas.getContext("2d")!;
+    this.ectx = this.emissive.getContext("2d")!;
+  }
+
+  render(world: World, trains: TrainSystem, viewW: number, viewH: number, camX: number, camY: number): void {
+    const W = Math.ceil(viewW);
+    const H = Math.ceil(viewH);
+    if (this.canvas.width !== W || this.canvas.height !== H) {
+      this.canvas.width = W;
+      this.canvas.height = H;
+      this.emissive.width = W;
+      this.emissive.height = H;
+    }
+    this.ctx.clearRect(0, 0, W, H);
+    this.ectx.clearRect(0, 0, W, H);
+    this.ctx.imageSmoothingEnabled = false;
+    this.ectx.imageSmoothingEnabled = false;
+    const painter = new TilePainter(world, this.ctx, this.ectx, -Math.round(camX), -Math.round(camY));
+    const blinkOn = Math.floor(trains.blink * 3) % 2 === 0;
+
+    // 踏切の警報: 遮断機を描き、その手前のタイルで隠す
+    for (const i of trains.activeCrossings) {
+      const x = i % world.w;
+      const y = Math.floor(i / world.w);
+      const [px, py] = painter.tileScreen(x, y);
+      const c = cornerHeights(world, x, y);
+      const h = Math.min(c[0], c[1], c[2], c[3]) * LEVEL_H;
+      const box: [number, number, number, number] = [px, py - h - 8, TILE_W, TILE_H + 8];
+      if (!this.visible(box, W, H)) continue;
+      painter.drawTile(x, y, trains.activeCrossings, blinkOn);
+      this.redrawFront(painter, x, y, box, trains.activeCrossings, blinkOn);
+    }
+    // 列車: 奥の車両から
+    const cars: { pose: CarPose; sum: number }[] = [];
+    for (const t of trains.trains) {
+      for (const pose of trains.carPoses(t)) cars.push({ pose, sum: pose.tx + pose.ty });
+    }
+    cars.sort((a, b) => a.sum - b.sum);
+    for (const { pose } of cars) {
+      const tx = Math.floor(pose.tx + 0.5);
+      const ty = Math.floor(pose.ty + 0.5);
+      if (!inBounds(world, tx, ty)) continue;
+      const [cx, cy] = painter.carScreen(pose);
+      const box: [number, number, number, number] = [cx - 16, cy - 24, 32, 32];
+      if (!this.visible(box, W, H)) continue;
+      painter.drawCar(pose);
+      this.redrawFront(painter, tx, ty, box, trains.activeCrossings, blinkOn);
+    }
+  }
+
+  private visible(box: [number, number, number, number], W: number, H: number): boolean {
+    return box[0] + box[2] > 0 && box[1] + box[3] > 0 && box[0] < W && box[1] < H;
+  }
+
+  /**
+   * (x,y) より手前にあり、box に重なりうるタイルを奥から順に描き直す。
+   * box にクリップするので、描き直したタイルがさらに手前のタイルを覆うことはない。
+   */
+  private redrawFront(
+    painter: TilePainter,
+    x: number,
+    y: number,
+    box: [number, number, number, number],
+    crossings: Set<number>,
+    blinkOn: boolean,
+  ): void {
+    const w = painter.world;
+    for (const c of [painter.ctx, painter.ectx]) {
+      c.save();
+      c.beginPath();
+      c.rect(box[0], box[1], box[2], box[3]);
+      c.clip();
+    }
+    const d0 = x - y;
+    const s0 = x + y;
+    for (let s = s0 + 1; s <= s0 + 13; s++) {
+      for (let d = d0 - 2; d <= d0 + 2; d++) {
+        if ((s + d) % 2 !== 0) continue;
+        const tx = (s + d) / 2;
+        const ty = (s - d) / 2;
+        if (!inBounds(w, tx, ty)) continue;
+        painter.drawTile(tx, ty, crossings, blinkOn);
+      }
+    }
+    for (const c of [painter.ctx, painter.ectx]) c.restore();
   }
 }
 
@@ -233,5 +380,3 @@ function shearTransform(px: number, py: number, oy: number, rel: readonly [numbe
   const f = Ty + ay * (-0.5 - oy / 16) + by * (0.5 - oy / 16);
   return [m11, m12, m21, m22, e, f];
 }
-
-export { DIR_E, DIR_W, Slope };

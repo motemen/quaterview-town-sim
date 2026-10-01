@@ -1,0 +1,145 @@
+import { railPath, stationIndices } from "./rail";
+import { World, idx, isRailLike, Kind } from "./world";
+
+export interface Train {
+  /** 先頭車両の経路上の位置 (タイル単位) */
+  pos: number;
+  dir: 1 | -1;
+  cars: number;
+  /** 停車の残り秒 */
+  stopTimer: number;
+  /** 直前に停車した駅のインデックス */
+  lastStop: number;
+}
+
+export interface CarPose {
+  /** タイル座標 (小数) */
+  tx: number;
+  ty: number;
+  /** 進行方向の軸 */
+  axis: "x" | "y";
+  /** 軸に沿った向き (+1 = 東/南) */
+  facing: 1 | -1;
+  kind: "head" | "mid" | "tail";
+}
+
+const CAR_SPACING = 0.78;
+const STOP_SECONDS = 1.8;
+const TRAIN_CARS = 3;
+
+/** シミュレーション速度に対する列車の見た目の速さ (タイル/秒) */
+function tilesPerSecond(simSpeed: number): number {
+  if (simSpeed <= 0) return 0;
+  if (simSpeed <= 1) return 7;
+  if (simSpeed <= 4) return 12;
+  return 18;
+}
+
+/** 列車の運行。保存はしない (再読み込みで消えてよい)。 */
+export class TrainSystem {
+  path: [number, number][] = [];
+  stations: number[] = [];
+  trains: Train[] = [];
+  private spawnTimer = 2;
+  private nextDir: 1 | -1 = 1;
+  /** 踏切ごとの警報状態 (tile index → true) */
+  activeCrossings = new Set<number>();
+  blink = 0;
+
+  constructor(w: World) {
+    this.refresh(w);
+  }
+
+  refresh(w: World): void {
+    this.path = railPath(w);
+    this.stations = stationIndices(w, this.path);
+  }
+
+  update(w: World, dtReal: number, simSpeed: number): void {
+    this.blink += dtReal;
+    if (simSpeed <= 0 || this.path.length < 2) return;
+    const v = tilesPerSecond(simSpeed) * dtReal;
+    const len = this.path.length;
+    for (const t of this.trains) {
+      if (t.stopTimer > 0) {
+        t.stopTimer -= dtReal;
+        continue;
+      }
+      const prev = t.pos;
+      t.pos += t.dir * v;
+      // 駅を通過したら停車
+      for (const s of this.stations) {
+        if (s === t.lastStop) continue;
+        if ((t.dir > 0 && prev < s && t.pos >= s) || (t.dir < 0 && prev > s && t.pos <= s)) {
+          t.pos = s;
+          t.stopTimer = STOP_SECONDS;
+          t.lastStop = s;
+          break;
+        }
+      }
+    }
+    const margin = TRAIN_CARS * CAR_SPACING + 1;
+    this.trains = this.trains.filter((t) => t.pos > -margin && t.pos < len - 1 + margin);
+    // 単線なので 1 本ずつ。人口が増えると間隔が短くなる
+    this.spawnTimer -= dtReal;
+    if (this.trains.length === 0 && this.spawnTimer <= 0) {
+      const dir = this.nextDir;
+      this.nextDir = dir === 1 ? -1 : 1;
+      this.trains.push({ pos: dir > 0 ? -margin + 0.5 : len - 1 + margin - 0.5, dir, cars: TRAIN_CARS, stopTimer: 0, lastStop: -1 });
+      this.spawnTimer = Math.max(4, 16 - w.population / 800);
+    }
+    this.updateCrossings(w);
+  }
+
+  private updateCrossings(w: World): void {
+    this.activeCrossings.clear();
+    for (const t of this.trains) {
+      const tail = t.pos - t.dir * (t.cars - 1) * CAR_SPACING;
+      const lo = Math.min(t.pos, tail) - 1;
+      const hi = Math.max(t.pos, tail) + 1;
+      const aheadLo = t.dir > 0 ? t.pos : t.pos - 5;
+      const aheadHi = t.dir > 0 ? t.pos + 5 : t.pos;
+      for (let k = Math.max(0, Math.floor(Math.min(lo, aheadLo))); k <= Math.min(this.path.length - 1, Math.ceil(Math.max(hi, aheadHi))); k++) {
+        const [x, y] = this.path[k];
+        const i = idx(w, x, y);
+        if (w.kind[i] === Kind.Crossing) this.activeCrossings.add(i);
+      }
+    }
+  }
+
+  /** デバッグ用: 指定位置に列車を置く */
+  spawnAt(pos: number, dir: 1 | -1, stopSeconds = 0): void {
+    this.trains.push({ pos, dir, cars: TRAIN_CARS, stopTimer: stopSeconds, lastStop: -1 });
+  }
+
+  /** 各車両の位置と向き */
+  carPoses(t: Train): CarPose[] {
+    const out: CarPose[] = [];
+    for (let c = 0; c < t.cars; c++) {
+      const p = t.pos - t.dir * c * CAR_SPACING;
+      const pose = this.poseAt(p, t.dir);
+      if (!pose) continue;
+      out.push({ ...pose, kind: c === 0 ? "head" : c === t.cars - 1 ? "tail" : "mid" });
+    }
+    return out;
+  }
+
+  private poseAt(p: number, dir: 1 | -1): Omit<CarPose, "kind"> | null {
+    const len = this.path.length;
+    if (p < -0.5 || p > len - 0.5) return null;
+    const k = Math.max(0, Math.min(len - 2, Math.floor(p)));
+    const [ax, ay] = this.path[k];
+    const [bx, by] = this.path[k + 1];
+    const t = p - k;
+    const tx = ax + (bx - ax) * t;
+    const ty = ay + (by - ay) * t;
+    const axis: "x" | "y" = bx !== ax ? "x" : "y";
+    const seg = axis === "x" ? bx - ax : by - ay;
+    const facing = (seg * dir > 0 ? 1 : -1) as 1 | -1;
+    return { tx, ty, axis, facing };
+  }
+}
+
+export function isOnRail(w: World, x: number, y: number): boolean {
+  return isRailLike(w.kind[idx(w, x, y)]);
+}
