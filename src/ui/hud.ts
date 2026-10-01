@@ -1,4 +1,4 @@
-import { LEVEL_CAPACITY } from "../sim/growth";
+import { LEVEL_CAPACITY, isMixedUse } from "../sim/growth";
 import { SEASON_LABEL, seasonOf, toCalendar } from "../sim/time";
 import { BState, Kind, World, idx } from "../sim/world";
 
@@ -16,7 +16,7 @@ const KIND_LABEL: Record<number, string> = {
   [Kind.Farm]: "田畑",
 };
 
-const LEVEL_LABEL = ["", "住宅", "商店・アパート", "中層ビル", "高層ビル"];
+const LEVEL_LABEL = ["", "住宅", "商店・アパート", "中層ビル", "高層ビル", "市役所", "タワー", "観覧車"];
 
 export class Hud {
   private dateEl = document.getElementById("hud-date")!;
@@ -91,7 +91,8 @@ export class Hud {
     let s = `(${x},${y}) ${KIND_LABEL[k] ?? "?"}`;
     if (k === Kind.Building) {
       const state = world.bState[i];
-      s += ` ${LEVEL_LABEL[world.bLevel[i]]}`;
+      const lv = world.bLevel[i];
+      s += ` ${lv === 2 || lv === 3 ? (isMixedUse(lv, world.bStyle[i]) ? "雑居ビル" : LEVEL_LABEL[lv]) : LEVEL_LABEL[lv]}`;
       if (state === BState.Constructing) s += ` 建設中 ${Math.round((world.bProgress[i] / 255) * 100)}%`;
       else if (state === BState.Abandoned) s += " 空き家";
       else s += ` 築${world.bAge[i]}日 ${LEVEL_CAPACITY[world.bLevel[i]]}人`;

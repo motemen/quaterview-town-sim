@@ -110,6 +110,21 @@ resize();
   const st = world.stations[0];
   cam.zoom = window.innerWidth > 1400 ? 3 : 2;
   cam.centerOnTile(st ? st.x : world.w / 2, st ? st.y : world.h / 2);
+  // デバッグ用: ?at=x,y でカメラの中心を指定
+  const at = new URLSearchParams(location.search).get("at");
+  if (at && at.startsWith("lm")) {
+    // ?at=lm6 でレベル 6 のランドマークへ
+    const lv = Number(at.slice(2));
+    for (let i = 0; i < world.kind.length; i++) {
+      if (world.kind[i] === 7 && world.bLevel[i] === lv) {
+        cam.centerOnTile(i % world.w, Math.floor(i / world.w));
+        break;
+      }
+    }
+  } else if (at) {
+    const [ax, ay] = at.split(",").map(Number);
+    cam.centerOnTile(ax, ay);
+  }
 }
 
 {

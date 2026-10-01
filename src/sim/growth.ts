@@ -1,6 +1,7 @@
 import { fbm } from "./rng";
 import { maybeOpenStation } from "./rail";
 import { updateWeather } from "./weather";
+import { isLandmark, maybeStartLandmark, LANDMARK_LABEL } from "./landmarks";
 import { seasonOf, toCalendar } from "./time";
 import {
   BState,
@@ -24,11 +25,11 @@ import {
 } from "./world";
 
 /** 建物レベルごとの人口 */
-export const LEVEL_CAPACITY = [0, 4, 14, 40, 120] as const;
+export const LEVEL_CAPACITY = [0, 4, 14, 40, 120, 0, 0, 0] as const;
 /** 建設にかかる日数 */
-export const CONSTRUCTION_DAYS = [0, 3, 5, 9, 14] as const;
+export const CONSTRUCTION_DAYS = [0, 3, 5, 9, 14, 20, 30, 24] as const;
 /** 建物レベルごとの階数 (描画用) */
-export const LEVEL_FLOORS = [0, 1, 2, 5, 10] as const;
+export const LEVEL_FLOORS = [0, 1, 2, 5, 10, 1, 1, 1] as const;
 
 export const STATION_RADIUS = 22;
 export const MAX_BRIDGE_LEN = 5;
@@ -51,6 +52,7 @@ export function hourlyStep(w: World, hour: number, totalDays: number): void {
     computeLandValue(w, totalDays);
     dailyAging(w);
     computePopulation(w);
+    maybeStartLandmark(w);
   }
   if (hour === 6) seasonalNews(w, cal.month, cal.day);
   if (hour === 18) rerollLights(w);
@@ -97,7 +99,7 @@ export function computeLandValue(w: World, totalDays: number): void {
           if (!inBounds(w, nx, ny)) continue;
           const j = idx(w, nx, ny);
           const k = w.kind[j];
-          if (k === Kind.Building && w.bState[j] === BState.Built) density += w.bLevel[j];
+          if (k === Kind.Building && w.bState[j] === BState.Built) density += Math.min(4, w.bLevel[j]);
           else if (k === Kind.Building && w.bState[j] === BState.Abandoned) density -= 1;
           if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) {
             if (k === Kind.Water || k === Kind.Park) amenity += 5;
@@ -422,6 +424,18 @@ function startConstruction(w: World, i: number, v: number): void {
   let level = levelForValue(v);
   if (level > 1 && w.rng.chance(0.4)) level--;
   if (level > 1 && w.rng.chance(0.25)) level--;
+  // ランドマークの周りは低い建物にして、眺めを隠さない
+  const x = i % w.w;
+  const y = Math.floor(i / w.w);
+  for (let dy = -1; dy <= 2; dy++) {
+    for (let dx = -1; dx <= 2; dx++) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (!inBounds(w, nx, ny)) continue;
+      const j = idx(w, nx, ny);
+      if (w.kind[j] === Kind.Building && isLandmark(w.bLevel[j])) level = Math.min(level, 2);
+    }
+  }
   w.kind[i] = Kind.Building;
   w.bLevel[i] = level;
   w.bStyle[i] = w.rng.int(256);
@@ -437,11 +451,15 @@ function stepBuilding(w: World, i: number): void {
   const level = w.bLevel[i];
   if (state === BState.Constructing) {
     const perHour = 255 / (CONSTRUCTION_DAYS[level] * 24);
-    const p = w.bProgress[i] + perHour;
+    // bProgress は整数なので、端数は確率で繰り上げる
+    const inc = Math.floor(perHour) + (w.rng.chance(perHour % 1) ? 1 : 0);
+    const p = w.bProgress[i] + inc;
     if (p >= 255) {
       w.bProgress[i] = 255;
       w.bState[i] = BState.Built;
-      if (level === 4 && !(w.flags & FLAG_FIRST_TOWER)) {
+      if (isLandmark(level)) {
+        w.events.push(`${LANDMARK_LABEL[level]}が完成しました`);
+      } else if (level === 4 && !(w.flags & FLAG_FIRST_TOWER)) {
         w.flags |= FLAG_FIRST_TOWER;
         w.events.push("街で初めての高層ビルが完成しました");
       } else if (level === 3 && !(w.flags & FLAG_FIRST_MIDRISE)) {
@@ -453,7 +471,19 @@ function stepBuilding(w: World, i: number): void {
     }
     return;
   }
-  const target = levelForValue(w.value[i]);
+  if (isLandmark(level)) return; // ランドマークは壊れない
+  let target = levelForValue(w.value[i]);
+  if (target > 2) {
+    const x = i % w.w;
+    const y = Math.floor(i / w.w);
+    for (let dy = -1; dy <= 2 && target > 2; dy++) {
+      for (let dx = -1; dx <= 2; dx++) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (inBounds(w, nx, ny) && w.kind[idx(w, nx, ny)] === Kind.Building && isLandmark(w.bLevel[idx(w, nx, ny)])) target = 2;
+      }
+    }
+  }
   if (state === BState.Built) {
     if (target > level && w.bAge[i] > 25) {
       // 建て替え

@@ -422,6 +422,7 @@ export function buildingSprite(spec: BuildingSpec): { base: Sprite; emissive: Sp
   const key = `b:${spec.level}:${spec.style}:${spec.floors}:${spec.state}:${spec.lights}`;
   return pairCache.get(key, () => {
     if (spec.level === 1) return houseSprite(spec);
+    if (spec.level >= 5) return landmarkSprite(spec);
     if (isMixedUse(spec.level, spec.style)) return mixedUseSprite(spec);
     return boxBuildingSprite(spec);
   });
@@ -741,6 +742,173 @@ function boxBuildingSprite(spec: BuildingSpec): { base: Sprite; emissive: Sprite
     if (level >= 2) anyLight = true;
   }
   return { base: toSprite(r, 0, baseTop), emissive: anyLight ? toSprite(e, 0, baseTop) : null };
+}
+
+/** ランドマーク: 市役所 (5)、タワー (6)、観覧車 (7) */
+function landmarkSprite(spec: BuildingSpec): { base: Sprite; emissive: Sprite | null } {
+  const constructing = spec.state === BState.Constructing;
+  const H = TILE_H + 110;
+  const baseTop = H - TILE_H;
+  const r = new Raster(TILE_W, H);
+  const e = new Raster(TILE_W, H);
+  if (constructing) {
+    // 工事現場: 柵と資材とクレーン
+    forEachDiamondPixel((x, y, u, v) => {
+      if (u > 0.08 && u < 0.92 && v > 0.08 && v < 0.92) {
+        const n = hash2(spec.style, x, y);
+        r.set(x, y + baseTop, n < 0.12 ? PAL.concreteDark : n < 0.2 ? PAL.sand : PAL.dirt);
+      }
+    });
+    drawScaffoldAndCrane(r, e, 4, 28, 24, baseTop, 0, 6, true);
+    return { base: toSprite(r, 0, baseTop), emissive: toSprite(e, 0, baseTop) };
+  }
+  if (spec.level === 5) drawHall(r, e, baseTop, spec);
+  else if (spec.level === 6) drawTower(r, e, baseTop);
+  else drawWheel(r, e, baseTop, spec);
+  return { base: toSprite(r, 0, baseTop), emissive: toSprite(e, 0, baseTop) };
+}
+
+function drawHall(r: Raster, e: Raster, baseTop: number, spec: BuildingSpec): void {
+  const fw = 32;
+  const fh = 6;
+  const floors = 3;
+  const wall: RGB = [238, 236, 226];
+  const wallR = shade(wall, 0.74);
+  const roof: RGB = [96, 128, 112];
+  const x0 = 0;
+  const x1 = 32;
+  const wallH = floors * fh;
+  for (let x = x0; x < x1; x++) {
+    const [ytR, ybR] = diamondRows(x, fw);
+    const yt = ytR + baseTop;
+    const yb = ybR + baseTop;
+    const left = x < HALF_W;
+    const along = left ? x - x0 : x1 - 1 - x;
+    for (let y = yb - wallH + 1; y <= yb; y++) r.set(x, y, left ? wall : wallR);
+    if (along % 4 === 1 || along % 4 === 2) {
+      for (let f = 0; f < floors; f++) {
+        const fTop = yb - (f + 1) * fh + 1;
+        const lit = hash3(spec.lights, f, along >> 2, left ? 1 : 2) < 0.4;
+        for (let wy = 2; wy <= 4; wy++) putWindow(r, e, x, fTop + wy, shade(PAL.windowDay, left ? 1 : 0.8), lit ? PAL.windowLit : null);
+      }
+    }
+    // 正面玄関 (左壁の中央寄り)
+    if (left && along >= 11 && along <= 13) {
+      for (let y = yb - 4; y <= yb; y++) r.set(x, y, shade(wall, 0.45));
+      e.set(x, yb - 4, PAL.windowLitWarm);
+    }
+    for (let y = yt - wallH; y <= yb - wallH; y++) {
+      const edge = y === yt - wallH || y === yb - wallH;
+      r.set(x, y, edge ? shade(roof, 0.75) : roof);
+    }
+    if (x === HALF_W) r.vline(x, yb - wallH + 1, yb, shade(wallR, 0.85));
+  }
+  // 時計塔
+  const towerTop = baseTop - wallH;
+  drawRoofBox(r, towerTop, 10, 12, wall, wallR, shade(roof, 0.9));
+  const cx = HALF_W - 3;
+  const cy = towerTop + HALF_H - 1 - 8;
+  r.fillRect(cx - 1, cy - 1, 3, 3, [250, 250, 240]);
+  r.set(cx, cy, [40, 40, 48]);
+  e.fillRect(cx - 1, cy - 1, 3, 3, [255, 248, 200]);
+  // 旗
+  const fx = HALF_W;
+  const fy = towerTop + HALF_H - 1 - 12;
+  r.vline(fx, fy - 7, fy - 1, PAL.railDark);
+  r.fillRect(fx + 1, fy - 7, 3, 2, [220, 60, 50]);
+}
+
+function drawTower(r: Raster, e: Raster, baseTop: number): void {
+  // 土台
+  forEachDiamondPixel((x, y, u, v) => {
+    if (u > 0.1 && u < 0.9 && v > 0.1 && v < 0.9) r.set(x, y + baseTop, hash2(5, x, y) < 0.08 ? PAL.concreteDark : PAL.concrete);
+  });
+  const orange: RGB = [232, 104, 48];
+  const dark: RGB = [168, 72, 32];
+  const height = 98;
+  const bottom = baseTop + HALF_H + 2;
+  const top = bottom - height;
+  for (let y = top; y <= bottom; y++) {
+    const t = (y - top) / height;
+    const hw = 1 + t * t * 13;
+    const lx = Math.round(HALF_W - hw);
+    const rx = Math.round(HALF_W + hw);
+    r.set(lx, y, orange);
+    r.set(rx, y, dark);
+    const row = y - top;
+    if (row % 7 === 0 && hw > 2) {
+      for (let x = lx + 1; x < rx; x++) r.set(x, y, (x - lx) % 2 === 0 ? orange : dark);
+    } else if (hw > 3) {
+      // 斜めの筋交い
+      const k = row % 7;
+      const span = rx - lx;
+      const px = lx + Math.round((k / 7) * span);
+      const qx = rx - Math.round((k / 7) * span);
+      r.set(px, y, dark);
+      r.set(qx, y, orange);
+    }
+  }
+  // 展望台
+  const deckY = top + Math.round(height * 0.45);
+  const dhw = Math.round(1 + 0.45 * 0.45 * 13) + 3;
+  r.fillRect(HALF_W - dhw, deckY - 2, dhw * 2 + 1, 4, [236, 236, 228]);
+  r.hline(HALF_W - dhw, HALF_W + dhw, deckY + 2, [160, 160, 152]);
+  for (let x = HALF_W - dhw + 1; x < HALF_W + dhw; x += 2) {
+    r.set(x, deckY, PAL.windowDay);
+    e.set(x, deckY, PAL.windowLit);
+  }
+  // アンテナと灯
+  r.vline(HALF_W, top - 6, top - 1, PAL.railDark);
+  r.set(HALF_W, top - 7, PAL.redLight);
+  e.set(HALF_W, top - 7, PAL.redLight);
+  e.set(HALF_W - 1, deckY - 3, PAL.redLight);
+  e.set(HALF_W + 1, deckY - 3, PAL.redLight);
+  // 脚の灯り
+  for (const y of [bottom - 8, bottom - 20, bottom - 32, bottom - 44, bottom - 56, bottom - 68, bottom - 80]) {
+    const t = (y - top) / height;
+    const hw = 1 + t * t * 13;
+    e.set(Math.round(HALF_W - hw), y, [255, 200, 120]);
+    e.set(Math.round(HALF_W + hw), y, [255, 200, 120]);
+  }
+}
+
+function drawWheel(r: Raster, e: Raster, baseTop: number, spec: BuildingSpec): void {
+  forEachDiamondPixel((x, y, u, v) => {
+    if (u > 0.08 && u < 0.92 && v > 0.08 && v < 0.92) r.set(x, y + baseTop, hash2(7, x, y) < 0.1 ? PAL.concreteDark : PAL.concrete);
+  });
+  const cx = HALF_W;
+  const cy = baseTop + HALF_H - 24;
+  const R = 15;
+  // 支柱
+  for (let k = 0; k <= 24; k++) {
+    const t = k / 24;
+    r.set(Math.round(cx - 1 - t * 10), Math.round(cy + t * 28), PAL.railDark);
+    r.set(Math.round(cx + 1 + t * 10), Math.round(cy + t * 28), PAL.railDark);
+  }
+  // リムとスポーク
+  const rim: RGB = [200, 204, 212];
+  for (let a = 0; a < 360; a += 3) {
+    const rad = (a * Math.PI) / 180;
+    r.set(Math.round(cx + Math.cos(rad) * R), Math.round(cy + Math.sin(rad) * R * 0.85), rim);
+  }
+  for (let g = 0; g < 8; g++) {
+    const rad = (g * Math.PI) / 4 + spec.style * 0.01;
+    for (let k = 0; k <= 14; k++) {
+      const t = k / 14;
+      r.set(Math.round(cx + Math.cos(rad) * R * t), Math.round(cy + Math.sin(rad) * R * 0.85 * t), [150, 154, 164]);
+    }
+    const gx = Math.round(cx + Math.cos(rad) * R);
+    const gy = Math.round(cy + Math.sin(rad) * R * 0.85) + 2;
+    const c = SIGNS[g % SIGNS.length];
+    r.fillRect(gx - 1, gy - 1, 3, 3, c);
+    r.set(gx, gy - 2, PAL.railDark);
+    e.fillRect(gx - 1, gy - 1, 3, 3, shade(c, 1.2));
+  }
+  r.fillRect(cx - 1, cy - 1, 3, 3, [240, 240, 232]);
+  for (let a = 0; a < 360; a += 30) {
+    const rad = (a * Math.PI) / 180;
+    e.set(Math.round(cx + Math.cos(rad) * R), Math.round(cy + Math.sin(rad) * R * 0.85), PAL.lamp);
+  }
 }
 
 function drawScaffoldAndCrane(r: Raster, e: Raster, x0: number, x1: number, fw: number, baseTop: number, floors: number, fh: number, crane: boolean): void {
