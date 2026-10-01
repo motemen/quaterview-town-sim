@@ -3,7 +3,9 @@ import { TrainSystem } from "./sim/trains";
 import { hashString } from "./sim/rng";
 import { SAVE_KEY, deserialize, serialize } from "./sim/save";
 import { advance, newWorld } from "./sim/sim";
-import { nightFactor, seasonOf, skyColor, tintColor, toCalendar } from "./sim/time";
+import { Season, nightFactor, seasonOf, skyColor, tintColor, toCalendar } from "./sim/time";
+import { Weather } from "./sim/weather";
+import { drawPrecipitation } from "./render/effects";
 import { World } from "./sim/world";
 import { Camera, attachInput } from "./ui/camera";
 import { Hud } from "./ui/hud";
@@ -41,6 +43,17 @@ function loadWorld(): World {
   // デバッグ用: ?days=N で N 日ぶん進めた状態から始める、?hour=H で時刻を変える
   const days = Number(params.get("days") ?? 0);
   for (let d = 0; d < days; d++) advance(w, 60, 1);
+  const month = params.get("month");
+  if (month !== null) {
+    // 月だけ変える (年初からの日数で指定)
+    const dayInMonth = Math.floor(w.minutes / 1440) % 30;
+    const year = Math.floor(w.minutes / (1440 * 360));
+    const inDay = w.minutes % 1440;
+    w.minutes = year * 1440 * 360 + ((Number(month) - 1) * 30 + dayInMonth) * 1440 + inDay;
+    w.lastHour = Math.floor(w.minutes / 60);
+  }
+  const weather = params.get("weather");
+  if (weather !== null) w.weather = Number(weather);
   const hour = params.get("hour");
   if (hour !== null) {
     const day = Math.floor(w.minutes / 1440);
@@ -116,11 +129,24 @@ let lastTime = performance.now();
 let lastSave = performance.now();
 let lastHour = world.lastHour;
 let fpsAcc = 0;
+let currentSeason: Season | null = null;
+const SEASON_INDEX: Record<Season, 0 | 1 | 2 | 3> = { spring: 0, summer: 1, autumn: 2, winter: 3 };
+let elapsed = 0;
+
+function applySeason(): void {
+  const season = seasonOf(toCalendar(world.minutes).month);
+  if (season === currentSeason) return;
+  currentSeason = season;
+  layer.painter.season = SEASON_INDEX[season];
+  layer.invalidate();
+}
 
 function frame(now: number): void {
   const dt = Math.min(0.25, (now - lastTime) / 1000);
   lastTime = now;
+  elapsed += dt;
   advance(world, dt, speed);
+  applySeason();
   if (world.lastHour !== lastHour) {
     lastHour = world.lastHour;
     layer.invalidate();
@@ -133,6 +159,7 @@ function frame(now: number): void {
   cam.clampTo(world);
   draw();
   hud.update(world);
+  hud.pumpNews(world, now);
   if (now - lastSave > 15000) {
     lastSave = now;
     save(world);
@@ -150,7 +177,9 @@ function draw(): void {
   const H = canvas.height;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.imageSmoothingEnabled = false;
-  const sky = skyColor(hour, season);
+  const wet = world.weather !== Weather.Clear;
+  let sky = skyColor(hour, season);
+  if (wet) sky = [sky[0] * 0.7, sky[1] * 0.72, sky[2] * 0.78];
   ctx.fillStyle = `rgb(${sky[0] | 0},${sky[1] | 0},${sky[2] | 0})`;
   ctx.globalCompositeOperation = "source-over";
   ctx.globalAlpha = 1;
@@ -162,12 +191,13 @@ function draw(): void {
   ctx.drawImage(layer.canvas, -layer.originX, -layer.originY);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   // 列車など動くもの
-  dyn.render(world, trains, cam.viewW, cam.viewH, cam.x, cam.y);
+  dyn.render(world, trains, cam.viewW, cam.viewH, cam.x, cam.y, SEASON_INDEX[season]);
   ctx.setTransform(z, 0, 0, z, 0, 0);
   ctx.drawImage(dyn.canvas, 0, 0);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   // 昼夜の色
-  const tint = tintColor(hour, season);
+  let tint = tintColor(hour, season);
+  if (wet) tint = [tint[0] * 0.72, tint[1] * 0.75, tint[2] * 0.84];
   ctx.globalCompositeOperation = "multiply";
   ctx.fillStyle = `rgb(${tint[0] | 0},${tint[1] | 0},${tint[2] | 0})`;
   ctx.fillRect(0, 0, W, H);
@@ -183,6 +213,7 @@ function draw(): void {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1;
   }
+  if (wet) drawPrecipitation(ctx, W, H, world.weather === Weather.Snow ? "snow" : "rain", elapsed, z);
 }
 
 window.addEventListener("pagehide", () => save(world));

@@ -45,3 +45,16 @@ html, body {
 }
 #hud button.active { background: var(--hud-accent); color: #1a1a2e; border-color: var(--hud-accent); }
 #hud button:hover { filter: brightness(1.2); }
+#hud #hud-town { color: var(--hud-accent); }
+#hud #hud-news {
+  color: #fff;
+  background: #2a2a4e;
+  padding: 0 10px;
+  border: 2px solid #4a4a7e;
+  max-width: 40vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  transition: opacity 0.4s;
+}
+#hud #hud-news.show { opacity: 1; }

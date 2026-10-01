@@ -38,6 +38,7 @@ export interface Station {
   y: number;
   /** 駅前広場の側 (方向インデックス) */
   plazaDir: number;
+  name?: string;
 }
 
 export interface World {
@@ -75,6 +76,14 @@ export interface World {
   events: string[];
   /** 駅が増えたことを描画側に知らせるフラグ */
   stationsChanged: boolean;
+  /** 天候 (Weather) */
+  weather: number;
+  /** この冬に初雪を見たか */
+  snowSeen: boolean;
+  /** 人口の節目 (通知済みの最大値) */
+  popMilestone: number;
+  /** 通知済みの出来事フラグ (ビット) */
+  flags: number;
 }
 
 export function createEmptyWorld(seed: number, w = MAP_W, h = MAP_H): World {
@@ -102,6 +111,10 @@ export function createEmptyWorld(seed: number, w = MAP_W, h = MAP_H): World {
     lastHour: Math.floor(START_MINUTES / 60),
     events: [],
     stationsChanged: false,
+    weather: 0,
+    snowSeen: false,
+    popMilestone: 0,
+    flags: 0,
   };
 }
 

@@ -14,6 +14,10 @@ interface SaveData {
   lastHour: number;
   population: number;
   stations: World["stations"];
+  weather?: number;
+  snowSeen?: boolean;
+  popMilestone?: number;
+  flags?: number;
   arrays: Record<string, string>;
 }
 
@@ -49,6 +53,10 @@ export function serialize(w: World): string {
     lastHour: w.lastHour,
     population: w.population,
     stations: w.stations,
+    weather: w.weather,
+    snowSeen: w.snowSeen,
+    popMilestone: w.popMilestone,
+    flags: w.flags,
     arrays,
   };
   return JSON.stringify(data);
@@ -79,6 +87,10 @@ export function deserialize(json: string): World | null {
   w.lastHour = data.lastHour;
   w.population = data.population;
   w.stations = data.stations;
+  w.weather = data.weather ?? 0;
+  w.snowSeen = data.snowSeen ?? false;
+  w.popMilestone = data.popMilestone ?? 0;
+  w.flags = data.flags ?? 0;
   updateSlopes(w);
   return w;
 }

@@ -22,6 +22,10 @@ export class Hud {
   private clockEl = document.getElementById("hud-clock")!;
   private popEl = document.getElementById("hud-pop")!;
   private infoEl = document.getElementById("hud-info")!;
+  private newsEl = document.getElementById("hud-news")!;
+  private townEl = document.getElementById("hud-town")!;
+  private newsQueue: string[] = [];
+  private newsUntil = 0;
   private speedButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("#hud button[data-speed]"));
   private lastText = "";
 
@@ -51,7 +55,24 @@ export class Hud {
     this.onSpeed(speed);
   }
 
+  /** ワールドに溜まった出来事を取り出してテロップに流す */
+  pumpNews(world: World, now: number): void {
+    while (world.events.length) this.newsQueue.push(world.events.shift()!);
+    if (now > this.newsUntil) {
+      const next = this.newsQueue.shift();
+      if (next) {
+        this.newsEl.textContent = "📰 " + next;
+        this.newsEl.classList.add("show");
+        this.newsUntil = now + 7000;
+      } else if (this.newsEl.classList.contains("show")) {
+        this.newsEl.classList.remove("show");
+      }
+    }
+  }
+
   update(world: World): void {
+    const town = world.stations[0]?.name ?? "";
+    if (this.townEl.textContent !== town) this.townEl.textContent = town;
     const c = toCalendar(world.minutes);
     const minute = Math.floor(c.minute / 10) * 10; // 10分刻み
     const clock = `${String(c.hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;

@@ -1,3 +1,4 @@
+import { makePlaceName } from "./names";
 import { BState, DX, DY, Kind, World, idx, inBounds, isFlat, isRailLike } from "./world";
 
 /** 線路の経路を西端から東端へたどる。 */
@@ -95,7 +96,8 @@ export function maybeOpenStation(w: World): boolean {
   w.bState[pi] = BState.None;
   w.bLevel[pi] = 0;
   w.lotTimer[pi] = 0;
-  w.stations.push({ x, y, plazaDir: best.plazaDir });
-  w.events.push(`新しい駅が開業しました (${w.stations.length}駅目)`);
+  const name = makePlaceName(w.rng, new Set(w.stations.map((s) => s.name ?? "")));
+  w.stations.push({ x, y, plazaDir: best.plazaDir, name });
+  w.events.push(`${name}駅が開業しました`);
   return true;
 }

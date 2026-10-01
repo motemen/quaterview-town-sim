@@ -52,8 +52,27 @@ const GROUND_COLORS: Record<GroundKind, [RGB, RGB, RGB]> = {
  * 地面タイル。rel は 4 隅の相対高さ [T,R,B,L] (0 or 1)。
  * スプライトは 32x24 で、タイル原点の 8px 上から始まる (oy = 8)。
  */
-export function groundSprite(kind: GroundKind, rel: readonly [number, number, number, number], variant: number): Sprite {
-  const key = `g:${kind}:${rel.join("")}:${variant}`;
+export type SeasonTint = 0 | 1 | 2 | 3; // 0=春/夏 1=夏 2=秋 3=冬
+
+function seasonalGround(kind: GroundKind, season: SeasonTint): [RGB, RGB, RGB] {
+  const base = GROUND_COLORS[kind];
+  if (kind === "water" || kind === "concrete" || kind === "rubble") return base;
+  if (season === 3) {
+    // 雪
+    if (kind === "lot") return [[220, 216, 212], [196, 190, 184], [236, 234, 230]];
+    return [[226, 232, 238], [204, 212, 222], [242, 246, 250]];
+  }
+  if (season === 2 && (kind === "grass" || kind === "park")) {
+    return [mix(base[0], [170, 150, 70], 0.45), mix(base[1], [140, 120, 60], 0.45), mix(base[2], [200, 180, 90], 0.45)];
+  }
+  if (season === 1 && (kind === "grass" || kind === "park")) {
+    return [shade(base[0], 0.92), shade(base[1], 0.9), shade(base[2], 0.95)];
+  }
+  return base;
+}
+
+export function groundSprite(kind: GroundKind, rel: readonly [number, number, number, number], variant: number, season: SeasonTint = 0): Sprite {
+  const key = `g:${kind}:${rel.join("")}:${variant}:${season}`;
   return cache.get(key, () => {
     const r = new Raster(TILE_W, TILE_H + 8);
     const [rT, rR, rB, rL] = rel;
@@ -64,7 +83,7 @@ export function groundSprite(kind: GroundKind, rel: readonly [number, number, nu
     const dzdx = (rR + rB - rT - rL) / 2;
     const dzdy = (rB + rL - rT - rR) / 2;
     const bright = kind === "water" ? 1 : 1 + 0.22 * dzdx + 0.12 * dzdy;
-    const [base, dark, light] = GROUND_COLORS[kind].map((c) => shade(c, bright)) as [RGB, RGB, RGB];
+    const [base, dark, light] = seasonalGround(kind, season).map((c) => shade(c, bright)) as [RGB, RGB, RGB];
     for (let x = 0; x < TILE_W; x++) {
       const xc = x + 0.5;
       let top: number;
@@ -100,7 +119,7 @@ export function groundSprite(kind: GroundKind, rel: readonly [number, number, nu
         r.set(x, y, c);
       }
     }
-    if (kind === "park") {
+    if (kind === "park" && season !== 3) {
       // 小道
       lineUV(r, 0.5, 0.0, 0.5, 1.0, shade(PAL.sand, 0.95), 8);
       lineUV(r, 0.0, 0.5, 1.0, 0.5, shade(PAL.sand, 0.95), 8);
@@ -118,9 +137,9 @@ export function treeSprite(variant: number, tint = 0): Sprite {
   return cache.get(key, () => {
     const r = new Raster(9, 12);
     const big = variant % 3 === 0;
-    const canopy = tint === 1 ? ([232, 176, 192] as RGB) : tint === 2 ? ([200, 120, 64] as RGB) : tint === 3 ? ([224, 232, 240] as RGB) : PAL.canopy;
-    const canopyLight = tint === 0 ? PAL.canopyLight : shade(canopy, 1.15);
-    const canopyDark = tint === 0 ? PAL.canopyDark : shade(canopy, 0.8);
+    const canopy = tint === 1 ? ([240, 184, 200] as RGB) : tint === 2 ? ([208, 128, 56] as RGB) : tint === 3 ? ([236, 240, 246] as RGB) : PAL.canopy;
+    const canopyLight = tint === 0 ? PAL.canopyLight : tint === 3 ? ([252, 252, 255] as RGB) : shade(canopy, 1.12);
+    const canopyDark = tint === 0 ? PAL.canopyDark : tint === 3 ? ([120, 140, 120] as RGB) : shade(canopy, 0.78);
     r.vline(4, 8, 11, PAL.trunk);
     const rad = big ? 3.6 : 3;
     const cy = big ? 5 : 6;
@@ -151,7 +170,13 @@ function inBand(u: number, v: number, hw: number, mask: number): boolean {
   return false;
 }
 
-function paintRoad(r: Raster, mask: number, bridge: boolean, dy = 0): void {
+function grassPixel(x: number, y: number, season: SeasonTint): RGB {
+  const [base, dark, light] = seasonalGround("grass", season);
+  const n = hash2(99, x, y);
+  return n < 0.09 ? dark : n < 0.15 ? light : base;
+}
+
+function paintRoad(r: Raster, mask: number, bridge: boolean, dy = 0, season: SeasonTint = 0): void {
   forEachDiamondPixel((x, y, u, v) => {
     const road = inBand(u, v, ROAD_HW, mask);
     const walk = !road && inBand(u, v, WALK_HW, mask);
@@ -159,19 +184,18 @@ function paintRoad(r: Raster, mask: number, bridge: boolean, dy = 0): void {
       const n = hash2(mask, x, y);
       r.set(x, y + dy, n < 0.05 ? PAL.roadDark : PAL.road);
     } else if (walk) {
-      r.set(x, y + dy, bridge ? PAL.railDark : PAL.sidewalk);
+      r.set(x, y + dy, bridge ? PAL.railDark : season === 3 ? ([214, 218, 224] as RGB) : PAL.sidewalk);
     } else if (!bridge) {
       // 周囲は草
-      const n = hash2(99, x, y);
-      r.set(x, y + dy, n < 0.09 ? PAL.grassDark : n < 0.15 ? PAL.grassLight : PAL.grass);
+      r.set(x, y + dy, grassPixel(x, y, season));
     }
   });
 }
 
-export function roadSprite(mask: number, bridge: boolean): Sprite {
-  return cache.get(`r:${mask}:${bridge ? 1 : 0}`, () => {
+export function roadSprite(mask: number, bridge: boolean, season: SeasonTint = 0): Sprite {
+  return cache.get(`r:${mask}:${bridge ? 1 : 0}:${season}`, () => {
     const r = new Raster(TILE_W, TILE_H);
-    paintRoad(r, mask, bridge);
+    paintRoad(r, mask, bridge, 0, season);
     return toSprite(r, 0, 0);
   });
 }
@@ -199,7 +223,7 @@ export function roadEmissive(mask: number): Sprite | null {
   });
 }
 
-function paintRail(r: Raster, mask: number, bridge: boolean, dy = 0, withBallast = true): void {
+function paintRail(r: Raster, mask: number, bridge: boolean, dy = 0, withBallast = true, season: SeasonTint = 0): void {
   const alongX = (mask & (DIR_E | DIR_W)) !== 0;
   const alongY = (mask & (DIR_N | DIR_S)) !== 0;
   if (withBallast) {
@@ -208,8 +232,7 @@ function paintRail(r: Raster, mask: number, bridge: boolean, dy = 0, withBallast
         const n = hash2(mask + 500, x, y);
         r.set(x, y + dy, bridge ? PAL.concreteDark : n < 0.15 ? shade(PAL.ballast, 0.85) : PAL.ballast);
       } else if (!bridge) {
-        const n = hash2(99, x, y);
-        r.set(x, y + dy, n < 0.09 ? PAL.grassDark : n < 0.15 ? PAL.grassLight : PAL.grass);
+        r.set(x, y + dy, grassPixel(x, y, season));
       }
     });
   }
@@ -240,18 +263,18 @@ function paintRail(r: Raster, mask: number, bridge: boolean, dy = 0, withBallast
   }
 }
 
-export function railSprite(mask: number, bridge: boolean): Sprite {
-  return cache.get(`rl:${mask}:${bridge ? 1 : 0}`, () => {
+export function railSprite(mask: number, bridge: boolean, season: SeasonTint = 0): Sprite {
+  return cache.get(`rl:${mask}:${bridge ? 1 : 0}:${season}`, () => {
     const r = new Raster(TILE_W, TILE_H);
-    paintRail(r, mask, bridge);
+    paintRail(r, mask, bridge, 0, true, season);
     return toSprite(r, 0, 0);
   });
 }
 
-export function crossingSprite(railMask: number, roadMask: number): Sprite {
-  return cache.get(`x:${railMask}:${roadMask}`, () => {
+export function crossingSprite(railMask: number, roadMask: number, season: SeasonTint = 0): Sprite {
+  return cache.get(`x:${railMask}:${roadMask}:${season}`, () => {
     const r = new Raster(TILE_W, TILE_H);
-    paintRoad(r, roadMask, false);
+    paintRoad(r, roadMask, false, 0, season);
     paintRail(r, railMask, false, 0, false);
     // 踏切の縞模様
     const alongX = (railMask & (DIR_E | DIR_W)) !== 0;
@@ -268,12 +291,12 @@ export function crossingSprite(railMask: number, roadMask: number): Sprite {
 }
 
 /** 駅: 線路 + ホーム + 屋根。スプライトは 32x26 (oy=10)。 */
-export function stationSprite(plazaDir: number): { base: Sprite; emissive: Sprite | null } {
-  return pairCache.get(`st:${plazaDir}`, () => {
+export function stationSprite(plazaDir: number, season: SeasonTint = 0): { base: Sprite; emissive: Sprite | null } {
+  return pairCache.get(`st:${plazaDir}:${season}`, () => {
     const DY = 10;
     const r = new Raster(TILE_W, TILE_H + DY);
     const e = new Raster(TILE_W, TILE_H + DY);
-    paintRail(r, DIR_E | DIR_W, false, DY);
+    paintRail(r, DIR_E | DIR_W, false, DY, true, season);
     const south = plazaDir === 2;
     const inPlatform = (v: number) => (south ? v >= 0.66 : v <= 0.34);
     forEachDiamondPixel((x, y, u, v) => {

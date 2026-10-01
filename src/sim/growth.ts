@@ -1,5 +1,7 @@
 import { fbm } from "./rng";
 import { maybeOpenStation } from "./rail";
+import { updateWeather } from "./weather";
+import { seasonOf, toCalendar } from "./time";
 import {
   BState,
   DX,
@@ -40,12 +42,17 @@ export function levelForValue(v: number): number {
 
 /** 1ゲーム時間ごとに呼ぶ。hour は 0..23。 */
 export function hourlyStep(w: World, hour: number, totalDays: number): void {
+  const cal = toCalendar(totalDays * 1440 + hour * 60);
+  const season = seasonOf(cal.month);
+  updateWeather(w, hour, cal.month, season);
   if (hour === 0) {
+    if (cal.month === 11 && cal.day === 1) w.snowSeen = false;
     if (totalDays % 10 === 0 && maybeOpenStation(w)) w.stationsChanged = true;
     computeLandValue(w, totalDays);
     dailyAging(w);
     computePopulation(w);
   }
+  if (hour === 6) seasonalNews(w, cal.month, cal.day);
   if (hour === 18) rerollLights(w);
   growRoads(w);
   growBuildings(w);
@@ -121,6 +128,10 @@ function dailyAging(w: World): void {
   }
 }
 
+const MILESTONES = [100, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000];
+export const FLAG_FIRST_TOWER = 1;
+export const FLAG_FIRST_MIDRISE = 2;
+
 export function computePopulation(w: World): void {
   let pop = 0;
   const n = w.w * w.h;
@@ -130,6 +141,29 @@ export function computePopulation(w: World): void {
     }
   }
   w.population = pop;
+  for (const m of MILESTONES) {
+    if (pop >= m && w.popMilestone < m) {
+      w.popMilestone = m;
+      w.events.push(`人口が${m.toLocaleString("ja-JP")}人を超えました`);
+    }
+  }
+}
+
+/** 季節の便り。毎日 6 時に呼ぶ。 */
+function seasonalNews(w: World, month: number, day: number): void {
+  if (day !== 1) return;
+  const msg: Record<number, string> = {
+    1: "新年あけましておめでとうございます",
+    3: "梅の花が咲きはじめました",
+    4: "桜が満開です",
+    6: "梅雨入りしました",
+    7: "海開きの季節です",
+    8: "今夜は花火大会です",
+    9: "虫の声が聞こえる季節になりました",
+    10: "紅葉がはじまりました",
+    12: "街のイルミネーションが点灯しました",
+  };
+  if (msg[month]) w.events.push(msg[month]);
 }
 
 function rerollLights(w: World): void {
@@ -381,6 +415,13 @@ function stepBuilding(w: World, i: number): void {
     if (p >= 255) {
       w.bProgress[i] = 255;
       w.bState[i] = BState.Built;
+      if (level === 4 && !(w.flags & FLAG_FIRST_TOWER)) {
+        w.flags |= FLAG_FIRST_TOWER;
+        w.events.push("街で初めての高層ビルが完成しました");
+      } else if (level === 3 && !(w.flags & FLAG_FIRST_MIDRISE)) {
+        w.flags |= FLAG_FIRST_MIDRISE;
+        w.events.push("初めての中層ビルが完成しました");
+      }
     } else {
       w.bProgress[i] = p;
     }

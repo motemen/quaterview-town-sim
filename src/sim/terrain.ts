@@ -1,4 +1,5 @@
 import { fbm, hash2 } from "./rng";
+import { makePlaceName } from "./names";
 import { Kind, MAX_HEIGHT, Slope, World, idx, inBounds, isFlat, DX, DY, updateSlopes } from "./world";
 
 /**
@@ -254,7 +255,7 @@ function placeInitialStation(w: World, railTiles: [number, number][], straightRa
       }
       w.kind[i] = Kind.Station;
       w.kind[pi] = Kind.Road;
-      w.stations.push({ x, y, plazaDir });
+      w.stations.push({ x, y, plazaDir, name: makePlaceName(w.rng) });
       return true;
     }
     return false;

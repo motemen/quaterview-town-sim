@@ -7,6 +7,7 @@ import { PAL } from "./palette";
 import { Sprite } from "./raster";
 import {
   GroundKind,
+  SeasonTint,
   buildingSprite,
   carSprite,
   crossingSprite,
@@ -24,8 +25,8 @@ import {
  * 発光キャンバスには、本体を描くたびに同じ形で消去 (destination-out) して遮蔽を表現する。
  */
 export class TilePainter {
-  /** 季節による木の色 (0=緑 1=桜 2=紅葉 3=雪) */
-  treeTint = 0;
+  /** 季節 (0=春 1=夏 2=秋 3=冬) */
+  season: SeasonTint = 0;
 
   constructor(
     readonly world: World,
@@ -84,7 +85,7 @@ export class TilePainter {
     else if (k === Kind.Lot) ground = w.lotTimer[i] < 20 ? "rubble" : "lot";
     else if (k === Kind.Park) ground = "park";
     else if (k === Kind.Building) ground = w.bLevel[i] >= 2 ? "concrete" : "grass";
-    this.blit(groundSprite(ground, rel, variant), px, py);
+    this.blit(groundSprite(ground, rel, variant, this.season), px, py);
 
     // マップの縁の断面
     if (x === w.w - 1 || y === w.h - 1) this.drawEdgeFace(x, y, px, py, rel);
@@ -111,17 +112,17 @@ export class TilePainter {
         break;
       case Kind.Road: {
         const mask = roadConnections(w, x, y);
-        this.blit(roadSprite(mask, water), px, py, rel);
+        this.blit(roadSprite(mask, water, this.season), px, py, rel);
         const em = roadEmissive(mask);
         if (em) this.blitEmissive(em, px, py);
         break;
       }
       case Kind.Rail:
-        this.blit(railSprite(railConnections(w, x, y), water), px, py, rel);
+        this.blit(railSprite(railConnections(w, x, y), water, this.season), px, py, rel);
         break;
       case Kind.Crossing: {
         const rm = railConnections(w, x, y);
-        this.blit(crossingSprite(rm, roadConnections(w, x, y)), px, py, rel);
+        this.blit(crossingSprite(rm, roadConnections(w, x, y), this.season), px, py, rel);
         if (activeCrossings?.has(i)) {
           const g = gateSprite((rm & (DIR_E | DIR_W)) !== 0, blinkOn);
           this.blit(g.base, px, py);
@@ -131,7 +132,7 @@ export class TilePainter {
       }
       case Kind.Station: {
         const st = w.stations.find((s) => s.x === x && s.y === y);
-        const sp = stationSprite(st ? st.plazaDir : 2);
+        const sp = stationSprite(st ? st.plazaDir : 2, this.season);
         this.blit(sp.base, px, py);
         if (sp.emissive) this.blitEmissive(sp.emissive, px, py);
         break;
@@ -178,7 +179,12 @@ export class TilePainter {
   private drawTree(px: number, py: number, rel: readonly [number, number, number, number], u: number, v: number, variant: number): void {
     const [lx, ly] = uvToPixel(u, v);
     const h = heightAt(rel, u, v) * LEVEL_H;
-    this.blit(treeSprite(variant, this.treeTint), px + Math.round(lx), py + Math.round(ly - h));
+    // 春は一部が桜、秋は多くが紅葉、冬は雪をかぶる
+    let tint = 0;
+    if (this.season === 0 && variant % 4 === 0) tint = 1;
+    else if (this.season === 2 && variant % 3 !== 0) tint = 2;
+    else if (this.season === 3) tint = 3;
+    this.blit(treeSprite(variant, tint), px + Math.round(lx), py + Math.round(ly - h));
   }
 
   private drawEdgeFace(x: number, y: number, px: number, py: number, rel: readonly [number, number, number, number]): void {
@@ -273,7 +279,7 @@ export class DynamicLayer {
     this.ectx = this.emissive.getContext("2d")!;
   }
 
-  render(world: World, trains: TrainSystem, viewW: number, viewH: number, camX: number, camY: number): void {
+  render(world: World, trains: TrainSystem, viewW: number, viewH: number, camX: number, camY: number, season: SeasonTint = 0): void {
     const W = Math.ceil(viewW);
     const H = Math.ceil(viewH);
     if (this.canvas.width !== W || this.canvas.height !== H) {
@@ -287,6 +293,7 @@ export class DynamicLayer {
     this.ctx.imageSmoothingEnabled = false;
     this.ectx.imageSmoothingEnabled = false;
     const painter = new TilePainter(world, this.ctx, this.ectx, -Math.round(camX), -Math.round(camY));
+    painter.season = season;
     const blinkOn = Math.floor(trains.blink * 3) % 2 === 0;
 
     // 踏切の警報: 遮断機を描き、その手前のタイルで隠す
