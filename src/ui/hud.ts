@@ -51,9 +51,9 @@ export class Hud {
       } else if (e.key === "1") this.setSpeed(1);
       else if (e.key === "2") this.setSpeed(4);
       else if (e.key === "3") this.setSpeed(16);
-      else if (e.key === "j" && !e.repeat) this.onJump(1);
-      else if (e.key === "J" && !e.repeat) this.onJump(10);
-      else if ((e.key === "l" || e.key === "L") && !e.repeat) this.onJump(30);
+      else if (e.key === "j" && !e.repeat) this.onJump(30);
+      else if (e.key === "J" && !e.repeat) this.onJump(90);
+      else if ((e.key === "l" || e.key === "L") && !e.repeat) this.onJump(360);
       else if (e.key === "?") this.toggleHelp();
       else if (e.key === "Escape") this.toggleHelp(false);
     });

@@ -74,3 +74,14 @@ html, body {
 #help td { padding: 0 12px 0 0; white-space: nowrap; }
 #help td:first-child { color: var(--hud-accent); }
 #help p { margin: 8px 0 0; font-size: 14px; }
+#minimap {
+  position: fixed;
+  right: 8px;
+  top: 8px;
+  width: 256px;
+  height: 128px;
+  image-rendering: pixelated;
+  border: 2px solid #3a3a5e;
+  background: rgba(10, 12, 30, 0.7);
+  cursor: pointer;
+}

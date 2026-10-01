@@ -13,6 +13,7 @@ import { tileOrigin } from "./render/iso";
 import { World } from "./sim/world";
 import { Camera, attachInput } from "./ui/camera";
 import { Hud } from "./ui/hud";
+import { Minimap } from "./ui/minimap";
 
 const canvas = document.getElementById("view") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
@@ -126,7 +127,7 @@ let jumpTotal = 0;
 function jumpDays(days: number): void {
   if (jumpQueue === 0) jumpTotal = 0;
   jumpQueue = Math.min(jumpQueue + days, 3600);
-  jumpTotal += days;
+  jumpTotal = jumpQueue;
 }
 
 function processJump(): void {
@@ -142,6 +143,7 @@ function processJump(): void {
     trains.refresh(world);
   }
   layer.detectChanges();
+  minimap.refresh();
   if (jumpQueue === 0) {
     save(world);
     const cal = toCalendar(world.minutes);
@@ -218,6 +220,11 @@ resize();
   if (tp !== null && trains.stations.length) trains.spawnAt(trains.stations[0] - Number(tp), 1, 60);
 }
 
+const minimap = new Minimap(world, cam);
+window.addEventListener("keydown", (e) => {
+  if (e.key === "m" || e.key === "M") minimap.toggle();
+});
+
 attachInput(canvas, cam, {
   onClick(cx, cy) {
     const t = cam.pick(world, cx, cy);
@@ -276,6 +283,7 @@ function frame(now: number): void {
   if (world.lastHour !== lastHour) {
     lastHour = world.lastHour;
     layer.detectChanges();
+    minimap.refresh();
   }
   if (world.stationsChanged) {
     world.stationsChanged = false;
@@ -294,6 +302,7 @@ function frame(now: number): void {
   draw();
   hud.update(world);
   hud.pumpNews(world, now);
+  minimap.draw();
   if (now - lastSave > 15000) {
     lastSave = now;
     save(world);
@@ -407,6 +416,7 @@ Object.assign(window as unknown as Record<string, unknown>, {
       world = w;
       layer = new MapLayer(world);
       trains = new TrainSystem(world);
+      minimap.setWorld(world);
     },
     trains: () => trains,
     layer: () => layer,
