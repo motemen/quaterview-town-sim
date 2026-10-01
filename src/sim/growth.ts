@@ -171,7 +171,7 @@ function seasonalNews(w: World, month: number, day: number): void {
 function rerollLights(w: World): void {
   const n = w.w * w.h;
   for (let i = 0; i < n; i++) {
-    if (w.kind[i] === Kind.Building && w.rng.chance(0.3)) w.lights[i] = w.rng.int(256);
+    if (w.kind[i] === Kind.Building && w.rng.chance(0.3)) w.lights[i] = w.rng.int(16);
   }
 }
 
@@ -532,7 +532,7 @@ function startConstruction(w: World, i: number, v: number): void {
   w.bProgress[i] = 0;
   w.bAge[i] = 0;
   w.lotTimer[i] = 0;
-  w.lights[i] = w.rng.int(256);
+  w.lights[i] = w.rng.int(16);
 }
 
 function stepBuilding(w: World, i: number): void {

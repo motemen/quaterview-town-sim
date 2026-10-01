@@ -46,23 +46,23 @@ export class TilePainter {
     if (rel && (rel[0] | rel[1] | rel[2] | rel[3]) !== 0) {
       const t = shearTransform(px, py, s.oy, rel);
       this.ctx.setTransform(t[0], t[1], t[2], t[3], t[4], t[5]);
-      this.ctx.drawImage(s.canvas, 0, 0);
+      this.ctx.drawImage(s.canvas, s.sx, s.sy, s.w, s.h, 0, 0, s.w, s.h);
       this.ctx.setTransform(1, 0, 0, 1, 0, 0);
       this.ectx.globalCompositeOperation = "destination-out";
       this.ectx.setTransform(t[0], t[1], t[2], t[3], t[4], t[5]);
-      this.ectx.drawImage(s.canvas, 0, 0);
+      this.ectx.drawImage(s.canvas, s.sx, s.sy, s.w, s.h, 0, 0, s.w, s.h);
       this.ectx.setTransform(1, 0, 0, 1, 0, 0);
       this.ectx.globalCompositeOperation = "source-over";
       return;
     }
-    this.ctx.drawImage(s.canvas, px - s.ox, py - s.oy);
+    this.ctx.drawImage(s.canvas, s.sx, s.sy, s.w, s.h, px - s.ox, py - s.oy, s.w, s.h);
     this.ectx.globalCompositeOperation = "destination-out";
-    this.ectx.drawImage(s.canvas, px - s.ox, py - s.oy);
+    this.ectx.drawImage(s.canvas, s.sx, s.sy, s.w, s.h, px - s.ox, py - s.oy, s.w, s.h);
     this.ectx.globalCompositeOperation = "source-over";
   }
 
   blitEmissive(s: Sprite, px: number, py: number): void {
-    this.ectx.drawImage(s.canvas, px - s.ox, py - s.oy);
+    this.ectx.drawImage(s.canvas, s.sx, s.sy, s.w, s.h, px - s.ox, py - s.oy, s.w, s.h);
   }
 
   /** タイル (x,y) の描画原点 (高さ 0 の平面上) */
@@ -341,6 +341,11 @@ export class MapLayer {
     ctx.imageSmoothingEnabled = false;
     ectx.imageSmoothingEnabled = false;
     this.painter = new TilePainter(world, ctx, ectx, this.originX, this.originY);
+    // GPU メモリ不足などでキャンバスの中身が失われたら描き直す
+    for (const c of [this.canvas, this.emissive]) {
+      c.addEventListener("contextrestored", () => this.invalidate());
+      c.addEventListener("contextlost", () => this.invalidate());
+    }
   }
 
   invalidate(): void {

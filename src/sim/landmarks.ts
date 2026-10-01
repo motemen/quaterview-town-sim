@@ -34,7 +34,7 @@ export function maybeStartLandmark(w: World): void {
     w.bProgress[site] = 0;
     w.bAge[site] = 0;
     w.lotTimer[site] = 0;
-    w.lights[site] = w.rng.int(256);
+    w.lights[site] = w.rng.int(16);
     w.events.push(`${LANDMARK_LABEL[p.level]}の建設が始まりました`);
     return;
   }

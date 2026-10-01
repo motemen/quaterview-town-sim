@@ -1,4 +1,5 @@
 import { DynamicLayer, MapLayer } from "./render/renderer";
+import { clearSpriteCache, spriteAtlasNearlyFull } from "./render/sprites";
 import { TrainSystem } from "./sim/trains";
 import { hashString } from "./sim/rng";
 import { SAVE_KEY, deserialize, serialize } from "./sim/save";
@@ -226,6 +227,7 @@ attachInput(canvas, cam, {
 
 let lastTime = performance.now();
 let lastSave = performance.now();
+let lastFullRefresh = performance.now();
 let lastHour = world.lastHour;
 let fpsAcc = 0;
 let currentSeason: Season | null = null;
@@ -258,6 +260,16 @@ function frame(now: number): void {
   const dt = Math.min(0.25, (now - lastTime) / 1000);
   lastTime = now;
   elapsed += dt;
+  // スプライトのアトラスが埋まりそうなら、描画の合間に全部作り直す
+  if (spriteAtlasNearlyFull()) {
+    clearSpriteCache();
+    layer.invalidate();
+  }
+  // 念のため定期的に静的レイヤーを描き直す (キャンバスの中身が失われたときの保険)
+  if (now - lastFullRefresh > 60000) {
+    lastFullRefresh = now;
+    layer.invalidate();
+  }
   if (jumpQueue > 0) processJump();
   else advance(world, dt, speed);
   applySeason();

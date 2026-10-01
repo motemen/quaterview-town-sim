@@ -3,14 +3,21 @@ import { buildingFloors, isMixedUse } from "../sim/growth";
 import { DIR_E, DIR_N, DIR_S, DIR_W, BState } from "../sim/world";
 import { HALF_H, HALF_W, TILE_H, TILE_W, diamondRows, pixelToUV, uvToPixel } from "./iso";
 import { PAL, ROOFS, SIGNS, TOWER_WALLS, WALLS } from "./palette";
-import { RGB, Raster, Sprite, SpriteCache, mix, shade, toSprite } from "./raster";
+import { RGB, Raster, Sprite, SpriteCache, atlas, mix, shade, toSprite } from "./raster";
 
-const cache = new SpriteCache<Sprite>(6000);
-const pairCache = new SpriteCache<{ base: Sprite; emissive: Sprite | null }>(6000);
+const cache = new SpriteCache<Sprite>();
+const pairCache = new SpriteCache<{ base: Sprite; emissive: Sprite | null }>();
 
+/** すべてのスプライトを捨てる (アトラスも空にする)。描画の合間に呼ぶこと。 */
 export function clearSpriteCache(): void {
   cache.clear();
   pairCache.clear();
+  atlas.reset();
+}
+
+/** アトラスが残り少ないか。true なら次のフレームの頭で clearSpriteCache する */
+export function spriteAtlasNearlyFull(): boolean {
+  return atlas.nearlyFull;
 }
 
 export type GroundKind = "grass" | "lot" | "park" | "concrete" | "water" | "sand" | "rubble" | "paddy" | "field" | "flower" | "orchard" | "farmpath";
