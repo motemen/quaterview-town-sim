@@ -20,6 +20,8 @@ import {
   isRoadLike,
   passableAlong,
   railConnections,
+  railIsStraightX,
+  railIsStraightY,
   roadConnections,
   cornerHeights,
 } from "./world";
@@ -239,8 +241,8 @@ export function roadExtension(w: World, x: number, y: number, dir: number): { ti
 
   if (k === Kind.Rail) {
     const rc = railConnections(w, tx, ty);
-    const alongX = (rc & (DIR_E | DIR_W)) !== 0 && (rc & (DIR_N | DIR_S)) === 0;
-    const alongY = (rc & (DIR_N | DIR_S)) !== 0 && (rc & (DIR_E | DIR_W)) === 0;
+    const alongX = railIsStraightX(rc);
+    const alongY = railIsStraightY(rc);
     const perpendicular = (alongX && (dir === 0 || dir === 2)) || (alongY && (dir === 1 || dir === 3));
     if (!perpendicular) return null;
     if (!isFlat(w, tx, ty)) return null;

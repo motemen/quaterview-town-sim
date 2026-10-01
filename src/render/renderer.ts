@@ -1,7 +1,7 @@
 import { visibleFloors } from "../sim/growth";
 import { fbm, hash2 } from "../sim/rng";
 import { CarPose, TrainSystem } from "../sim/trains";
-import { BState, DX, DY, Kind, World, cornerHeights, idx, inBounds, railConnections, roadConnections, DIR_E, DIR_W } from "../sim/world";
+import { BState, DX, DY, Kind, World, cornerHeights, idx, inBounds, railConnections, railIsStraightX, roadConnections } from "../sim/world";
 import { HALF_H, HALF_W, LEVEL_H, TILE_H, TILE_W, heightAt, tileOrigin, uvToPixel } from "./iso";
 import { PAL } from "./palette";
 import { Sprite } from "./raster";
@@ -209,7 +209,7 @@ export class TilePainter {
         const rm = railConnections(w, x, y);
         this.blit(crossingSprite(rm, roadConnections(w, x, y), this.season), px, py, rel);
         if (activeCrossings?.has(i)) {
-          const g = gateSprite((rm & (DIR_E | DIR_W)) !== 0, blinkOn);
+          const g = gateSprite(railIsStraightX(rm), blinkOn);
           this.blit(g.base, px, py);
           if (g.emissive) this.blitEmissive(g.emissive, px, py);
         }

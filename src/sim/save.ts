@@ -1,7 +1,8 @@
 import { Rng } from "./rng";
 import { World, createEmptyWorld, updateSlopes } from "./world";
+import { updateRailMask } from "./rail";
 
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 2;
 export const SAVE_KEY = "quaterview-town-sim/save";
 
 interface SaveData {
@@ -92,5 +93,6 @@ export function deserialize(json: string): World | null {
   w.popMilestone = data.popMilestone ?? 0;
   w.flags = data.flags ?? 0;
   updateSlopes(w);
+  updateRailMask(w);
   return w;
 }

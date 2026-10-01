@@ -1,7 +1,7 @@
 import { makePlaceName } from "./names";
-import { BState, DX, DY, Kind, World, idx, inBounds, isFlat, isRailLike } from "./world";
+import { BState, DX, DX8, DY, DY8, Kind, R8_BIT, R8_E, R8_W, World, idx, inBounds, isFlat, isRailLike } from "./world";
 
-/** 線路の経路を西端から東端へたどる。 */
+/** 線路の経路を西端から東端へたどる (8 近傍。直進 > 直角 > 斜めの順に優先)。 */
 export function railPath(w: World): [number, number][] {
   let start: [number, number] | null = null;
   for (let y = 0; y < w.h && !start; y++) {
@@ -12,24 +12,56 @@ export function railPath(w: World): [number, number][] {
   const path: [number, number][] = [start];
   visited[idx(w, start[0], start[1])] = 1;
   let [x, y] = start;
+  let heading = 2; // 東
   for (;;) {
     let next: [number, number] | null = null;
-    // 東を優先し、次に南北
-    for (const d of [1, 2, 0, 3]) {
-      const nx = x + DX[d];
-      const ny = y + DY[d];
+    let nextHeading = heading;
+    // 来た向きを基準に: 直進、直角 (±2)、斜め (±1)、残り
+    for (const off of [0, 2, -2, 1, -1, 3, -3]) {
+      const d = (heading + off + 8) % 8;
+      const nx = x + DX8[d];
+      const ny = y + DY8[d];
       if (!inBounds(w, nx, ny)) continue;
       const i = idx(w, nx, ny);
       if (visited[i] || !isRailLike(w.kind[i])) continue;
       next = [nx, ny];
+      nextHeading = d;
       break;
     }
     if (!next) break;
     visited[idx(w, next[0], next[1])] = 1;
     path.push(next);
     [x, y] = next;
+    heading = nextHeading;
   }
   return path;
+}
+
+/** 経路から各線路タイルの接続マスクを計算する */
+export function updateRailMask(w: World): [number, number][] {
+  w.railMask.fill(0);
+  const path = railPath(w);
+  for (let k = 0; k < path.length; k++) {
+    const [x, y] = path[k];
+    const i = idx(w, x, y);
+    if (k > 0) {
+      const [px, py] = path[k - 1];
+      w.railMask[i] |= R8_BIT[dirIndex(px - x, py - y)];
+    }
+    if (k + 1 < path.length) {
+      const [nx, ny] = path[k + 1];
+      w.railMask[i] |= R8_BIT[dirIndex(nx - x, ny - y)];
+    }
+    // マップ端から外へ
+    if (x === 0) w.railMask[i] |= R8_W;
+    if (x === w.w - 1) w.railMask[i] |= R8_E;
+  }
+  return path;
+}
+
+function dirIndex(dx: number, dy: number): number {
+  for (let d = 0; d < 8; d++) if (DX8[d] === dx && DY8[d] === dy) return d;
+  return 2;
 }
 
 /** 経路上の駅の位置 (インデックス) */

@@ -1,5 +1,6 @@
 import { fbm, hash2 } from "./rng";
 import { makePlaceName } from "./names";
+import { updateRailMask } from "./rail";
 import { Kind, MAX_HEIGHT, Slope, World, idx, inBounds, isFlat, DX, DY, updateSlopes } from "./world";
 
 /**
@@ -23,15 +24,19 @@ export function generateTerrain(w: World): void {
   for (let x = 0; x < W; x++) {
     railTiles.push([x, ry]);
     sinceJog++;
-    const canJog = x > 4 && x < W - 6 && sinceJog > 10;
+    const canJog = x > 4 && x < W - 8 && sinceJog > 10;
     if (canJog && hash2(seed + 77, x, 0) < 0.12) {
+      // 斜め (135°) に 1〜3 マスずれて、また東へ
       const dir = hash2(seed + 78, x, 0) < 0.5 ? -1 : 1;
-      const ny = Math.min(H - 4, Math.max(3, ry + dir));
-      if (ny !== ry) {
+      const len = 1 + Math.floor(hash2(seed + 79, x, 0) * 3);
+      for (let k = 0; k < len && x < W - 6; k++) {
+        const ny = Math.min(H - 4, Math.max(3, ry + dir));
+        if (ny === ry) break;
+        x++;
         ry = ny;
         railTiles.push([x, ry]);
-        sinceJog = 0;
       }
+      sinceJog = 0;
     }
   }
   for (const [x, y] of railTiles) onRail[idx(w, x, y)] = 1;
@@ -204,6 +209,8 @@ export function generateTerrain(w: World): void {
 
   // 9. 神社: 森の中の平地に
   placeShrine(w);
+
+  updateRailMask(w);
 }
 
 function placeShrine(w: World): void {

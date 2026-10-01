@@ -1,6 +1,6 @@
 import { hash2, hash3 } from "../sim/rng";
 import { buildingFloors, isMixedUse } from "../sim/growth";
-import { DIR_E, DIR_N, DIR_S, DIR_W, BState } from "../sim/world";
+import { DIR_E, DIR_N, DIR_S, DIR_W, BState, R8_BIT, R8_E, R8_W, railIsStraightX } from "../sim/world";
 import { HALF_H, HALF_W, TILE_H, TILE_W, diamondRows, pixelToUV, uvToPixel } from "./iso";
 import { PAL, ROOFS, SIGNS, TOWER_WALLS, WALLS } from "./palette";
 import { RGB, Raster, Sprite, SpriteCache, atlas, mix, shade, toSprite } from "./raster";
@@ -466,12 +466,47 @@ export function roadEmissive(mask: number): Sprite | null {
   });
 }
 
+/** 8 方向の接続先 (uv 座標): 辺の中点または角 */
+const RAIL_ENDS: [number, number][] = [
+  [0.5, 0], // N
+  [1, 0], // NE
+  [1, 0.5], // E
+  [1, 1], // SE
+  [0.5, 1], // S
+  [0, 1], // SW
+  [0, 0.5], // W
+  [0, 0], // NW
+];
+
+function railSegments(mask: number): [number, number, number, number][] {
+  const segs: [number, number, number, number][] = [];
+  for (let d = 0; d < 8; d++) {
+    if (mask & R8_BIT[d]) segs.push([0.5, 0.5, RAIL_ENDS[d][0], RAIL_ENDS[d][1]]);
+  }
+  if (segs.length === 0) segs.push([0, 0.5, 1, 0.5]);
+  return segs;
+}
+
+function distToSegment(u: number, v: number, s: [number, number, number, number]): number {
+  const [u0, v0, u1, v1] = s;
+  const du = u1 - u0;
+  const dv = v1 - v0;
+  const len2 = du * du + dv * dv;
+  let t = len2 > 0 ? ((u - u0) * du + (v - v0) * dv) / len2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  const px = u0 + du * t - u;
+  const py = v0 + dv * t - v;
+  return Math.sqrt(px * px + py * py);
+}
+
+/** 線路 (任意の方向の組み合わせ) を描く */
 function paintRail(r: Raster, mask: number, bridge: boolean, dy = 0, withBallast = true, season: SeasonTint = 0): void {
-  const alongX = (mask & (DIR_E | DIR_W)) !== 0;
-  const alongY = (mask & (DIR_N | DIR_S)) !== 0;
+  const segs = railSegments(mask);
   if (withBallast) {
     forEachDiamondPixel((x, y, u, v) => {
-      if (inBand(u, v, 0.2, mask)) {
+      let dmin = 9;
+      for (const sg of segs) dmin = Math.min(dmin, distToSegment(u, v, sg));
+      if (dmin <= 0.2) {
         const n = hash2(mask + 500, x, y);
         r.set(x, y + dy, bridge ? PAL.concreteDark : n < 0.15 ? shade(PAL.ballast, 0.85) : PAL.ballast);
       } else if (!bridge) {
@@ -479,29 +514,28 @@ function paintRail(r: Raster, mask: number, bridge: boolean, dy = 0, withBallast
       }
     });
   }
-  const segs: [number, number, number, number][] = [];
-  // 各接続方向について中心から端まで
-  if (mask & DIR_W) segs.push([0.5, 0.5, 0, 0.5]);
-  if (mask & DIR_E) segs.push([0.5, 0.5, 1, 0.5]);
-  if (mask & DIR_N) segs.push([0.5, 0.5, 0.5, 0]);
-  if (mask & DIR_S) segs.push([0.5, 0.5, 0.5, 1]);
-  if (!alongX && !alongY) segs.push([0, 0.5, 1, 0.5]);
-  // 枕木
+  // 枕木 (線分に直交)
   for (const [u0, v0, u1, v1] of segs) {
-    const horizontal = v0 === v1;
-    for (let t = 0.08; t < 1; t += 0.16) {
-      const u = u0 + (u1 - u0) * t;
-      const v = v0 + (v1 - v0) * t;
-      if (horizontal) lineUV(r, u, v - 0.13, u, v + 0.13, PAL.sleeper, dy);
-      else lineUV(r, u - 0.13, v, u + 0.13, v, PAL.sleeper, dy);
+    const du = u1 - u0;
+    const dv = v1 - v0;
+    const len = Math.hypot(du, dv);
+    const nu = -dv / len;
+    const nv = du / len;
+    for (let t = 0.08; t < 1; t += 0.16 / len) {
+      const u = u0 + du * t;
+      const v = v0 + dv * t;
+      lineUV(r, u - nu * 0.13, v - nv * 0.13, u + nu * 0.13, v + nv * 0.13, PAL.sleeper, dy);
     }
   }
   // レール
   for (const [u0, v0, u1, v1] of segs) {
-    const horizontal = v0 === v1;
+    const du = u1 - u0;
+    const dv = v1 - v0;
+    const len = Math.hypot(du, dv);
+    const nu = -dv / len;
+    const nv = du / len;
     for (const off of [-0.08, 0.08]) {
-      if (horizontal) lineUV(r, u0, v0 + off, u1, v1 + off, PAL.rail, dy);
-      else lineUV(r, u0 + off, v0, u1 + off, v1, PAL.rail, dy);
+      lineUV(r, u0 + nu * off, v0 + nv * off, u1 + nu * off, v1 + nv * off, PAL.rail, dy);
     }
   }
 }
@@ -516,7 +550,7 @@ export function railSprite(mask: number, bridge: boolean, season: SeasonTint = 0
     // 鉄橋: 桁を線路の高さ (lift) に置き、橋脚と側桁 (トラス) を描く
     const DY = lift + 8;
     const r = new Raster(TILE_W, TILE_H + DY);
-    const alongX = (mask & (DIR_E | DIR_W)) !== 0;
+    const alongX = (mask & (R8_E | R8_W)) !== 0;
     const steel: RGB = [150, 64, 52];
     const steelDark: RGB = [104, 44, 36];
     const pier: RGB = [120, 120, 112];
@@ -535,7 +569,10 @@ export function railSprite(mask: number, bridge: boolean, season: SeasonTint = 0
     }
     // 桁 (デッキ)
     forEachDiamondPixel((x, y, u, v) => {
-      if (inBand(u, v, 0.24, mask)) r.set(x, y + DY - lift, hash2(mask + 7, x, y) < 0.1 ? shade(PAL.concreteDark, 0.9) : PAL.concreteDark);
+      const segs = railSegments(mask);
+      let dmin = 9;
+      for (const sg of segs) dmin = Math.min(dmin, distToSegment(u, v, sg));
+      if (dmin <= 0.24) r.set(x, y + DY - lift, hash2(mask + 7, x, y) < 0.1 ? shade(PAL.concreteDark, 0.9) : PAL.concreteDark);
     });
     paintRail(r, mask, true, DY - lift, false, season);
     // 側桁: 両側に低いトラス
@@ -561,7 +598,7 @@ export function crossingSprite(railMask: number, roadMask: number, season: Seaso
     paintRoad(r, roadMask, false, 0, season);
     paintRail(r, railMask, false, 0, false);
     // 踏切の縞模様
-    const alongX = (railMask & (DIR_E | DIR_W)) !== 0;
+    const alongX = railIsStraightX(railMask);
     for (const side of [-1, 1]) {
       const v = 0.5 + side * 0.3;
       for (let t = 0.26; t <= 0.74; t += 0.06) {
@@ -580,7 +617,7 @@ export function stationSprite(plazaDir: number, season: SeasonTint = 0): { base:
     const DY = 10;
     const r = new Raster(TILE_W, TILE_H + DY);
     const e = new Raster(TILE_W, TILE_H + DY);
-    paintRail(r, DIR_E | DIR_W, false, DY, true, season);
+    paintRail(r, R8_E | R8_W, false, DY, true, season);
     const south = plazaDir === 2;
     const inPlatform = (v: number) => (south ? v >= 0.66 : v <= 0.34);
     forEachDiamondPixel((x, y, u, v) => {
@@ -1278,9 +1315,87 @@ function isoBox(
 }
 
 export interface CarSpriteSpec {
-  axis: "x" | "y";
+  axis: "x" | "y" | "ne" | "se";
   facing: 1 | -1;
   kind: "head" | "mid" | "tail";
+}
+
+/** 凸四角形の内側か (uv 空間) */
+function insideQuad(u: number, v: number, q: [number, number][]): boolean {
+  let sign = 0;
+  for (let i = 0; i < 4; i++) {
+    const [au, av] = q[i];
+    const [bu, bv] = q[(i + 1) % 4];
+    const cross = (bu - au) * (v - av) - (bv - av) * (u - au);
+    if (cross === 0) continue;
+    const sgn = cross > 0 ? 1 : -1;
+    if (sign === 0) sign = sgn;
+    else if (sign !== sgn) return false;
+  }
+  return true;
+}
+
+/**
+ * 任意の向きの箱 (車両用)。footprint は uv 座標の四角形 (時計回りでなくてもよい)。
+ * 画面手前 (uv で +u+v 方向) を向く辺が側面として見える。
+ */
+function isoBoxQuad(
+  r: Raster,
+  quad: [number, number][],
+  h: number,
+  baseTop: number,
+  colors: { top: RGB; side: RGB },
+  sidePixel?: (x: number, y: number, edge: number, t: number, k: number, facing: number) => RGB | null,
+): void {
+  // 辺ごとの外向き法線 (手前向きかどうか)
+  const cu = quad.reduce((a, q) => a + q[0], 0) / 4;
+  const cv = quad.reduce((a, q) => a + q[1], 0) / 4;
+  const edges = quad.map((a, i) => {
+    const b = quad[(i + 1) % 4];
+    let nu = b[1] - a[1];
+    let nv = -(b[0] - a[0]);
+    const len = Math.hypot(nu, nv) || 1;
+    nu /= len;
+    nv /= len;
+    // 中心から外へ向くように
+    const mu = (a[0] + b[0]) / 2 - cu;
+    const mv = (a[1] + b[1]) / 2 - cv;
+    if (nu * mu + nv * mv < 0) {
+      nu = -nu;
+      nv = -nv;
+    }
+    return { a, b, nu, nv, facing: (nu + nv) / Math.SQRT2 };
+  });
+  const ground: [number, number, number, number][] = [];
+  forEachDiamondPixel((x, y, u, v) => {
+    if (insideQuad(u, v, quad)) ground.push([x, y + baseTop, u, v]);
+  });
+  ground.sort((a, b) => a[1] - b[1]);
+  for (const [x, y, u, v] of ground) {
+    // 一番近い手前向きの辺
+    let best = -1;
+    let bestD = 9;
+    for (let i = 0; i < 4; i++) {
+      if (edges[i].facing <= 0.05) continue;
+      const d = distToSegment(u, v, [edges[i].a[0], edges[i].a[1], edges[i].b[0], edges[i].b[1]]);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    const e = edges[best >= 0 ? best : 0];
+    // 辺に沿った位置 0..1
+    const du = e.b[0] - e.a[0];
+    const dv = e.b[1] - e.a[1];
+    const t = Math.max(0, Math.min(1, ((u - e.a[0]) * du + (v - e.a[1]) * dv) / (du * du + dv * dv || 1)));
+    const bright = 0.7 + 0.3 * Math.max(0, e.nv) + 0.05 * Math.max(0, -e.nu);
+    const base = shade(colors.side, bright);
+    for (let k = 1; k <= h; k++) {
+      const c = sidePixel ? (sidePixel(x, y - k, best, t, k, e.facing) ?? base) : base;
+      r.set(x, y - k, c);
+    }
+  }
+  for (const [x, y] of ground) r.set(x, y - h, colors.top);
 }
 
 /** 車両。タイル中心を (16, 24) に置いた 32x32 のラスタ (ox=16, oy=24)。 */
@@ -1290,52 +1405,69 @@ export function carSprite(spec: CarSpriteSpec): { base: Sprite; emissive: Sprite
     const r = new Raster(32, 32);
     const e = new Raster(32, 32);
     const baseTop = 16;
-    const half = 0.4;
-    const wid = 0.15;
-    const [u0, u1, v0, v1] = spec.axis === "x" ? [0.5 - half, 0.5 + half, 0.5 - wid, 0.5 + wid] : [0.5 - wid, 0.5 + wid, 0.5 - half, 0.5 + half];
+    // 進行軸 (uv) と、車両の長さ・幅
+    const axisVec: Record<CarSpriteSpec["axis"], [number, number]> = { x: [1, 0], y: [0, 1], ne: [Math.SQRT1_2, -Math.SQRT1_2], se: [Math.SQRT1_2, Math.SQRT1_2] };
+    const [au, av] = axisVec[spec.axis];
+    const half = spec.axis === "x" || spec.axis === "y" ? 0.4 : 0.58;
+    const wid = spec.axis === "x" || spec.axis === "y" ? 0.15 : 0.13;
+    const pu = -av;
+    const pv = au;
+    const quad: [number, number][] = [
+      [0.5 - au * half - pu * wid, 0.5 - av * half - pv * wid],
+      [0.5 + au * half - pu * wid, 0.5 + av * half - pv * wid],
+      [0.5 + au * half + pu * wid, 0.5 + av * half + pv * wid],
+      [0.5 - au * half + pu * wid, 0.5 - av * half + pv * wid],
+    ];
+    // 辺 0: 進行軸に平行 (片側)、辺 1: +軸側の端、辺 2: 平行 (反対側)、辺 3: -軸側の端
     const body: RGB = [236, 232, 216];
     const stripe: RGB = [48, 96, 192];
     const H = 7;
-    // 前端が見える側か: 東向き (x軸 +1) なら前端は u1 側 (SE面)、南向き (y軸 +1) なら v1 側 (SW面)
-    const frontVisible = spec.facing === 1;
     const front = spec.kind === "head";
     const back = spec.kind === "tail";
-    isoBox(r, u0, v0, u1, v1, H, baseTop, { top: [120, 124, 132], sw: body, se: shade(body, 0.75) }, (_x, _y, side, u, v, k) => {
-      const longSide = spec.axis === "x" ? side === "sw" : side === "se";
-      const along = spec.axis === "x" ? u - u0 : v - v0;
-      if (k === 2) return side === "sw" ? stripe : shade(stripe, 0.75);
+    const frontEdge = spec.facing === 1 ? 1 : 3;
+    const backEdge = spec.facing === 1 ? 3 : 1;
+    isoBoxQuad(r, quad, H, baseTop, { top: [120, 124, 132], side: body }, (_x, _y, edge, t, k, facing) => {
+      const longSide = edge === 0 || edge === 2;
+      if (k === 2) return shade(stripe, 0.7 + 0.3 * facing);
       if (longSide && (k === 4 || k === 5)) {
-        const w = (along / (2 * half)) * 7;
-        if (w % 1 < 0.55 && w > 0.4 && w < 6.6) return side === "sw" ? PAL.windowDay : shade(PAL.windowDay, 0.8);
+        const w = t * 7;
+        if (w % 1 < 0.55 && w > 0.4 && w < 6.6) return shade(PAL.windowDay, 0.8 + 0.2 * facing);
       }
-      if (!longSide && front && frontVisible && k === 3) return PAL.windowDay;
+      if (!longSide && (front || back) && edge === frontEdge && front && k === 3) return PAL.windowDay;
       return null;
     });
-    // 前照灯・尾灯 (見える端面の下のほう)
-    const endSide: "sw" | "se" = spec.axis === "x" ? "se" : "sw";
-    const endU = spec.axis === "x" ? u1 : 0.5;
-    const endV = spec.axis === "x" ? 0.5 : v1;
-    const [ex, ey] = uvToPixel(endU, endV);
-    const lx = Math.floor(ex);
-    const ly = Math.floor(ey) + baseTop - 2;
-    void endSide;
-    if (frontVisible && front) {
-      e.set(lx - 1, ly, PAL.lamp);
-      e.set(lx + 1, ly, PAL.lamp);
-      r.set(lx - 1, ly, [255, 250, 200]);
-      r.set(lx + 1, ly, [255, 250, 200]);
-    } else if (!frontVisible && back) {
-      e.set(lx - 1, ly, PAL.redLight);
-      e.set(lx + 1, ly, PAL.redLight);
-      r.set(lx - 1, ly, [200, 60, 50]);
-      r.set(lx + 1, ly, [200, 60, 50]);
+    // 前照灯・尾灯: 見える端面に。端面が真横 (見えない) のときは角に置く
+    const endEdge = front ? frontEdge : back ? backEdge : -1;
+    if (endEdge >= 0) {
+      const a = quad[endEdge];
+      const b = quad[(endEdge + 1) % 4];
+      const mu = (a[0] + b[0]) / 2;
+      const mv = (a[1] + b[1]) / 2;
+      // 端面の中心が手前側 (u+v が大きい) なら見える
+      const visible = mu + mv > 1.0 + 0.05;
+      if (visible || spec.axis === "ne" || spec.axis === "se") {
+        const [ex, ey] = uvToPixel(mu, mv);
+        const lx = Math.floor(ex);
+        const ly = Math.floor(ey) + baseTop - 2;
+        const c: RGB = front ? PAL.lamp : PAL.redLight;
+        const cd: RGB = front ? [255, 250, 200] : [200, 60, 50];
+        if (visible) {
+          e.set(lx - 1, ly, c);
+          e.set(lx + 1, ly, c);
+          r.set(lx - 1, ly, cd);
+          r.set(lx + 1, ly, cd);
+        } else {
+          e.set(lx, ly, c);
+          r.set(lx, ly, cd);
+        }
+      }
     }
     // 窓明かり
     for (let y = 0; y < 32; y++) {
       for (let x = 0; x < 32; x++) {
         const i = (y * 32 + x) * 4;
         const d = r.data;
-        if (d[i + 3] && d[i] === PAL.windowDay[0] && d[i + 1] === PAL.windowDay[1] && d[i + 2] === PAL.windowDay[2]) {
+        if (d[i + 3] && Math.abs(d[i] - PAL.windowDay[0]) <= 15 && Math.abs(d[i + 1] - PAL.windowDay[1]) <= 19 && Math.abs(d[i + 2] - PAL.windowDay[2]) <= 26) {
           e.set(x, y, PAL.windowLit);
         }
       }

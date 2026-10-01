@@ -16,9 +16,9 @@ export interface CarPose {
   /** タイル座標 (小数) */
   tx: number;
   ty: number;
-  /** 進行方向の軸 */
-  axis: "x" | "y";
-  /** 軸に沿った向き (+1 = 東/南) */
+  /** 進行方向の軸: x=東西 y=南北 ne=北東-南西 (画面では水平) se=北西-南東 (画面では垂直) */
+  axis: "x" | "y" | "ne" | "se";
+  /** 軸に沿った向き (+1 = 東/南/北東/南東) */
   facing: 1 | -1;
   kind: "head" | "mid" | "tail";
 }
@@ -133,8 +133,23 @@ export class TrainSystem {
     const t = p - k;
     const tx = ax + (bx - ax) * t;
     const ty = ay + (by - ay) * t;
-    const axis: "x" | "y" = bx !== ax ? "x" : "y";
-    const seg = axis === "x" ? bx - ax : by - ay;
+    const sdx = bx - ax;
+    const sdy = by - ay;
+    let axis: CarPose["axis"];
+    let seg: number;
+    if (sdy === 0) {
+      axis = "x";
+      seg = sdx;
+    } else if (sdx === 0) {
+      axis = "y";
+      seg = sdy;
+    } else if (sdx * sdy < 0) {
+      axis = "ne";
+      seg = sdx;
+    } else {
+      axis = "se";
+      seg = sdx;
+    }
     const facing = (seg * dir > 0 ? 1 : -1) as 1 | -1;
     return { tx, ty, axis, facing };
   }

@@ -39,6 +39,19 @@ export const DY = [-1, 0, 1, 0] as const;
 export const DIR_N = 1, DIR_E = 2, DIR_S = 4, DIR_W = 8;
 export const DIR_BIT = [DIR_N, DIR_E, DIR_S, DIR_W] as const;
 
+/** 8 方向 (線路用): 0=N 1=NE 2=E 3=SE 4=S 5=SW 6=W 7=NW */
+export const DX8 = [0, 1, 1, 1, 0, -1, -1, -1] as const;
+export const DY8 = [-1, -1, 0, 1, 1, 1, 0, -1] as const;
+export const R8_N = 1, R8_NE = 2, R8_E = 4, R8_SE = 8, R8_S = 16, R8_SW = 32, R8_W = 64, R8_NW = 128;
+export const R8_BIT = [R8_N, R8_NE, R8_E, R8_SE, R8_S, R8_SW, R8_W, R8_NW] as const;
+/** 線路が東西方向の直線か */
+export function railIsStraightX(mask: number): boolean {
+  return mask === (R8_E | R8_W);
+}
+export function railIsStraightY(mask: number): boolean {
+  return mask === (R8_N | R8_S);
+}
+
 export interface Station {
   x: number;
   y: number;
@@ -57,6 +70,8 @@ export interface World {
   water: Uint8Array;
   /** タイルの傾斜 (Slope)。地形から導出、保存しない */
   slope: Uint8Array;
+  /** 線路の 8 方向接続マスク (R8_*)。経路から導出、保存しない */
+  railMask: Uint8Array;
   kind: Uint8Array;
   /** 地価 0..255 */
   value: Uint8Array;
@@ -101,6 +116,7 @@ export function createEmptyWorld(seed: number, w = MAP_W, h = MAP_H): World {
     height: new Uint8Array((w + 1) * (h + 1)),
     water: new Uint8Array(n),
     slope: new Uint8Array(n),
+    railMask: new Uint8Array(n),
     kind: new Uint8Array(n),
     value: new Uint8Array(n),
     bLevel: new Uint8Array(n),
@@ -205,12 +221,9 @@ export function connections(w: World, x: number, y: number, pred: (k: number) =>
   return m;
 }
 
+/** 線路の接続 (8 方向マスク)。rail.ts の updateRailMask で計算したものを返す。 */
 export function railConnections(w: World, x: number, y: number): number {
-  let m = connections(w, x, y, isRailLike);
-  // マップ端から出ていく線路
-  if (x === 0 && isRailLike(w.kind[idx(w, x, y)])) m |= DIR_W;
-  if (x === w.w - 1 && isRailLike(w.kind[idx(w, x, y)])) m |= DIR_E;
-  return m;
+  return w.railMask[y * w.w + x];
 }
 
 export function roadConnections(w: World, x: number, y: number): number {

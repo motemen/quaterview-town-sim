@@ -13,7 +13,7 @@ describe("rail path", () => {
     for (let k = 1; k < path.length; k++) {
       const [ax, ay] = path[k - 1];
       const [bx, by] = path[k];
-      expect(Math.abs(ax - bx) + Math.abs(ay - by)).toBe(1);
+      expect(Math.max(Math.abs(ax - bx), Math.abs(ay - by))).toBe(1);
       expect(isRailLike(w.kind[idx(w, bx, by)])).toBe(true);
     }
     expect(stationIndices(w, path).length).toBe(1);
