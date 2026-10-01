@@ -76,7 +76,7 @@ function farmColors(kind: "paddy" | "field" | "flower", season: SeasonTint): [RG
 
 /**
  * 地面タイル。rel は 4 隅の相対高さ [T,R,B,L] (0 or 1)。
- * スプライトは 32x24 で、タイル原点の 8px 上から始まる (oy = 8)。
+ * スプライトは 32x32 で、タイル原点の 16px 上から始まる (oy = 16)。対角の頂点は 2 段差があり得る。
  */
 export type SeasonTint = 0 | 1 | 2 | 3; // 0=春/夏 1=夏 2=秋 3=冬
 
@@ -105,18 +105,24 @@ function seasonalGround(kind: GroundKind, season: SeasonTint): [RGB, RGB, RGB] {
 export function groundSprite(kind: GroundKind, rel: readonly [number, number, number, number], variant: number, season: SeasonTint = 0): Sprite {
   const key = `g:${kind}:${rel.join("")}:${variant}:${season}`;
   return cache.get(key, () => {
-    const r = new Raster(TILE_W, TILE_H + 8);
+    const TOP = 16;
+    const r = new Raster(TILE_W, TILE_H + TOP);
     const [rT, rR, rB, rL] = rel;
-    const Ty = 8 - rT * 8;
-    const Ry = 16 - rR * 8;
-    const By = 24 - rB * 8;
-    const Ly = 16 - rL * 8;
+    const Ty = TOP - rT * 8;
+    const Ry = TOP + 8 - rR * 8;
+    const By = TOP + 16 - rB * 8;
+    const Ly = TOP + 8 - rL * 8;
     const dzdx = (rR + rB - rT - rL) / 2;
     const dzdy = (rB + rL - rT - rR) / 2;
     const bright = kind === "water" ? 1 : 1 + 0.22 * dzdx + 0.12 * dzdy;
     const [base, dark, light] = seasonalGround(kind, season).map((c) => shade(c, bright)) as [RGB, RGB, RGB];
     const farm = kind === "paddy" || kind === "field" || kind === "flower" ? farmColors(kind, season) : null;
-    const farmAlongX = (variant & 2) !== 0;
+    // 田畑: variant = 畝の向き (bit0) | 区画の縁 (bit1..4: N,E,S,W)
+    const farmAlongX = (variant & 1) !== 0;
+    const edgeMask = (variant >> 1) & 15;
+    // 野原: variant = 種類 (bit3..4: 0=ふつう 1=灌木 2=草花 3=枯れ草) | 模様 (bit0..2)
+    const meadow = kind === "grass" ? (variant >> 3) & 3 : 0;
+    const dry: RGB = season === 3 ? base : mix(base, [196, 188, 96], 0.35);
     for (let x = 0; x < TILE_W; x++) {
       const xc = x + 0.5;
       let top: number;
@@ -147,10 +153,11 @@ export function groundSprite(kind: GroundKind, rel: readonly [number, number, nu
           else if (n < 0.3) c = dark;
         } else if (farm) {
           // 畝 (うね) の縞と、縁の畦 (あぜ)
-          const [u, v] = pixelToUV(x + 0.5, y - 8 + 0.5);
+          const [u, v] = pixelToUV(x + 0.5, y - TOP + 0.5);
           const along = farmAlongX ? v : u;
           const phase = (along * 7) % 1;
-          if (u < 0.08 || v < 0.08 || u > 0.97 || v > 0.97) c = season === 3 ? [190, 186, 176] : ([128, 108, 76] as RGB);
+          const onEdge = (v < 0.08 && edgeMask & 1) || (u > 0.93 && edgeMask & 2) || (v > 0.93 && edgeMask & 4) || (u < 0.08 && edgeMask & 8);
+          if (onEdge) c = season === 3 ? [190, 186, 176] : ([128, 108, 76] as RGB);
           else if (kind === "flower") {
             // 花は点々と
             if (phase < 0.5 && n < 0.55) c = n < 0.2 ? shade(farm[2], 1.15) : farm[2];
@@ -162,14 +169,31 @@ export function groundSprite(kind: GroundKind, rel: readonly [number, number, nu
           else c = farm[0];
           if (season === 3 && kind === "field" && n < 0.5) c = farm[2];
         } else if (kind === "farmpath") {
-          // 轍 (わだち) のある土の道
-          const [u, v] = pixelToUV(x + 0.5, y - 8 + 0.5);
-          const rutX = Math.abs(v - 0.38) < 0.05 || Math.abs(v - 0.62) < 0.05;
-          const rutY = Math.abs(u - 0.38) < 0.05 || Math.abs(u - 0.62) < 0.05;
+          // 草地の中の細い土の道 (轍が 2 本)
+          const [u, v] = pixelToUV(x + 0.5, y - TOP + 0.5);
           const alongX = (variant & 1) !== 0;
-          if ((alongX ? rutX : rutY) && n > 0.25) c = dark;
-          else if (n < 0.08) c = light;
-          if (season === 3 && n < 0.6 && !(alongX ? rutX : rutY)) c = [226, 232, 238];
+          const across = alongX ? v : u;
+          const g = seasonalGround("grass", season);
+          const inPath = Math.abs(across - 0.5) < 0.22;
+          const rut = Math.abs(across - 0.4) < 0.045 || Math.abs(across - 0.6) < 0.045;
+          if (!inPath) c = n < 0.09 ? g[1] : n < 0.15 ? g[2] : g[0];
+          else if (rut) c = n < 0.3 ? mix(base, g[0], 0.4) : dark;
+          else c = n < 0.35 ? mix(base, g[0], 0.5) : base;
+          if (season === 3 && n < 0.6 && !rut) c = [226, 232, 238];
+        } else if (kind === "grass" && meadow === 1) {
+          // 灌木の茂み
+          if (n < 0.16) c = [60, 112, 52];
+          else if (n < 0.22) c = dark;
+          else if (n < 0.26) c = light;
+        } else if (kind === "grass" && meadow === 2) {
+          // 草花 (まばらに)
+          if (n < 0.018) c = season === 3 ? light : season === 2 ? [232, 200, 96] : [250, 250, 230];
+          else if (n < 0.03) c = season === 3 ? light : [240, 176, 200];
+          else if (n < 0.12) c = dark;
+          else if (n < 0.16) c = light;
+        } else if (kind === "grass" && meadow === 3) {
+          // 枯れ草まじりの野原
+          c = n < 0.1 ? shade(dry, 0.88) : n < 0.18 ? shade(dry, 1.08) : dry;
         } else if (kind === "orchard") {
           if (n < 0.06) c = dark;
         } else {
@@ -181,10 +205,10 @@ export function groundSprite(kind: GroundKind, rel: readonly [number, number, nu
     }
     if (kind === "park" && season !== 3) {
       // 小道
-      lineUV(r, 0.5, 0.0, 0.5, 1.0, shade(PAL.sand, 0.95), 8);
-      lineUV(r, 0.0, 0.5, 1.0, 0.5, shade(PAL.sand, 0.95), 8);
+      lineUV(r, 0.5, 0.0, 0.5, 1.0, shade(PAL.sand, 0.95), TOP);
+      lineUV(r, 0.0, 0.5, 1.0, 0.5, shade(PAL.sand, 0.95), TOP);
     }
-    return toSprite(r, 0, 8);
+    return toSprite(r, 0, TOP);
   });
 }
 

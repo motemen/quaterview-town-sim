@@ -1,7 +1,7 @@
 import { visibleFloors } from "../sim/growth";
-import { hash2 } from "../sim/rng";
+import { fbm, hash2 } from "../sim/rng";
 import { CarPose, TrainSystem } from "../sim/trains";
-import { BState, Kind, World, cornerHeights, idx, inBounds, railConnections, roadConnections, DIR_E, DIR_W } from "../sim/world";
+import { BState, DX, DY, Kind, World, cornerHeights, idx, inBounds, railConnections, roadConnections, DIR_E, DIR_W } from "../sim/world";
 import { HALF_H, HALF_W, LEVEL_H, TILE_H, TILE_W, heightAt, tileOrigin, uvToPixel } from "./iso";
 import { PAL } from "./palette";
 import { Sprite } from "./raster";
@@ -94,7 +94,24 @@ export class TilePainter {
     else if (k === Kind.FarmPath) ground = "farmpath";
     else if (k === Kind.Shrine) ground = "grass";
     let gv = variant;
-    if (k === Kind.Farm) gv = (w.bStyle[i] & 4) >> 1; // 畝の向き
+    if (ground === "grass") {
+      // 野原の種類はゆるやかなノイズで決める (まとまって現れる)
+      const m = fbm(w.seed + 900, x / 7, y / 7, 2);
+      const meadow = m < 0.42 ? 3 : m < 0.5 ? 1 : m > 0.6 ? 2 : 0;
+      gv = variant | (meadow << 3);
+    }
+    if (k === Kind.Farm) {
+      // 畝の向き + 同じ種類の田畑と接していない縁
+      let mask = 0;
+      const type = w.bStyle[i] & 3;
+      for (let d = 0; d < 4; d++) {
+        const nx = x + DX[d];
+        const ny = y + DY[d];
+        const same = inBounds(w, nx, ny) && w.kind[idx(w, nx, ny)] === Kind.Farm && (w.bStyle[idx(w, nx, ny)] & 3) === type;
+        if (!same) mask |= 1 << d;
+      }
+      gv = ((w.bStyle[i] & 4) >> 2) | (mask << 1);
+    }
     if (k === Kind.FarmPath) {
       // 隣の農道・道路の向きに合わせる
       const ew = (inBounds(w, x - 1, y) && (w.kind[idx(w, x - 1, y)] === Kind.FarmPath || w.kind[idx(w, x - 1, y)] === Kind.Road)) || (inBounds(w, x + 1, y) && (w.kind[idx(w, x + 1, y)] === Kind.FarmPath || w.kind[idx(w, x + 1, y)] === Kind.Road));
@@ -106,22 +123,21 @@ export class TilePainter {
     if (x === w.w - 1 || y === w.h - 1) this.drawEdgeFace(x, y, px, py, rel);
 
     switch (k) {
-      case Kind.Forest: {
-        const spots: [number, number][] = [
-          [0.3, 0.3],
-          [0.7, 0.45],
-          [0.4, 0.75],
-        ];
-        for (let n = 0; n < spots.length; n++) {
-          if (hash2(w.seed + n, x, y) < 0.15) continue;
-          const [u, v] = spots[n];
-          const ju = u + (hash2(w.seed + 11 + n, x, y) - 0.5) * 0.2;
-          const jv = v + (hash2(w.seed + 17 + n, x, y) - 0.5) * 0.2;
-          this.drawTree(px, py, rel, ju, jv, variant * 3 + n);
+      case Kind.Grass: {
+        // まばらな木立: ノイズの高いところに 1〜2 本
+        const wood = fbm(w.seed + 950, x / 5, y / 5, 2);
+        if (wood > 0.58) {
+          const count = wood > 0.68 ? 2 : 1;
+          for (let n = 0; n < count; n++) {
+            if (hash2(w.seed + 40 + n, x, y) > 0.55) continue;
+            const u = 0.2 + hash2(w.seed + 41 + n, x, y) * 0.6;
+            const v = 0.2 + hash2(w.seed + 42 + n, x, y) * 0.6;
+            this.drawTree(px, py, rel, u, v, variant * 3 + n);
+          }
         }
         break;
       }
-      case Kind.Farm:
+      case Kind.Farm: {
         if ((w.bStyle[i] & 3) === 3) {
           for (const [u, v] of [
             [0.3, 0.3],
@@ -134,7 +150,38 @@ export class TilePainter {
             this.blit(orchardTreeSprite(this.season), px + Math.round(lx), py + Math.round(ly - h));
           }
         }
+        // 防風林: 区画の北や西の縁に木を並べる
+        const type = w.bStyle[i] & 3;
+        const northEdge = !(inBounds(w, x, y - 1) && w.kind[idx(w, x, y - 1)] === Kind.Farm && (w.bStyle[idx(w, x, y - 1)] & 3) === type);
+        const westEdge = !(inBounds(w, x - 1, y) && w.kind[idx(w, x - 1, y)] === Kind.Farm && (w.bStyle[idx(w, x - 1, y)] & 3) === type);
+        if (northEdge && hash2(w.seed + 70, 0, y) < 0.35) {
+          this.drawTree(px, py, rel, 0.25, 0.06, variant * 5);
+          this.drawTree(px, py, rel, 0.75, 0.06, variant * 5 + 1);
+        } else if (westEdge && hash2(w.seed + 71, x, 0) < 0.35) {
+          this.drawTree(px, py, rel, 0.06, 0.3, variant * 5 + 2);
+          this.drawTree(px, py, rel, 0.06, 0.8, variant * 5 + 3);
+        }
         break;
+      }
+      case Kind.Forest: {
+        // 密度はノイズで変える (1〜4 本)
+        const dens = fbm(w.seed + 960, x / 6, y / 6, 2);
+        const spots: [number, number][] = [
+          [0.3, 0.3],
+          [0.7, 0.45],
+          [0.4, 0.75],
+          [0.75, 0.8],
+        ];
+        const want = dens < 0.4 ? 1 : dens < 0.5 ? 2 : dens < 0.62 ? 3 : 4;
+        for (let n = 0; n < want; n++) {
+          if (hash2(w.seed + n, x, y) < 0.1) continue;
+          const [u, v] = spots[n];
+          const ju = u + (hash2(w.seed + 11 + n, x, y) - 0.5) * 0.2;
+          const jv = v + (hash2(w.seed + 17 + n, x, y) - 0.5) * 0.2;
+          this.drawTree(px, py, rel, ju, jv, variant * 3 + n);
+        }
+        break;
+      }
       case Kind.Shrine: {
         const sp = shrineSprite(this.season);
         this.blit(sp.base, px, py);

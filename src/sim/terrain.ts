@@ -92,6 +92,34 @@ export function generateTerrain(w: World): void {
       }
     }
   }
+  // 池: 低地に小さな水たまりを 2〜4 個
+  const pondCount = 3 + Math.floor(hash2(seed, 5, 5) * 4);
+  for (let n = 0; n < pondCount; n++) {
+    const cx = 4 + Math.floor(hash2(seed + 61, n, 0) * (W - 8));
+    const cy = 4 + Math.floor(hash2(seed + 62, n, 0) * (H - 8));
+    if (Math.abs(cy - railYAt(railTiles, cx)) < 4) continue;
+    const rx = 1 + hash2(seed + 63, n, 0) * 1.6;
+    const ry = 1 + hash2(seed + 64, n, 0) * 1.6;
+    // 周囲も含めて低地 (高さノイズが 0 の範囲) であること
+    let lowland = true;
+    for (let vy = cy - 3; vy <= cy + 4 && lowland; vy++) {
+      for (let vx = cx - 3; vx <= cx + 4; vx++) {
+        if (vx < 0 || vy < 0 || vx > W || vy > H) continue;
+        if (fbm(seed, vx / 13, vy / 13, 3) > 0.47) {
+          lowland = false;
+          break;
+        }
+      }
+    }
+    if (!lowland) continue;
+    for (let y = cy - 3; y <= cy + 3; y++) {
+      for (let x = cx - 3; x <= cx + 3; x++) {
+        if (!inBounds(w, x, y)) continue;
+        const d = ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 + (hash2(seed + 65, x, y) - 0.5) * 0.6;
+        if (d < 1) w.water[idx(w, x, y)] = 1;
+      }
+    }
+  }
   // 線路のカーブ部分は水面にしない。陸上の線路の周囲 8 近傍も水面にしない (築堤を保つ)。
   for (const [x, y] of railTiles) {
     const i = idx(w, x, y);
