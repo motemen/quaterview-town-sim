@@ -141,7 +141,7 @@ function processJump(): void {
     world.stationsChanged = false;
     trains.refresh(world);
   }
-  layer.invalidate();
+  layer.detectChanges();
   if (jumpQueue === 0) {
     save(world);
     const cal = toCalendar(world.minutes);
@@ -243,8 +243,8 @@ function applySeason(): void {
   if (season === currentSeason && illumination === currentIllumination) return;
   currentSeason = season;
   currentIllumination = illumination;
-  layer.painter.season = SEASON_INDEX[season];
-  layer.painter.illumination = illumination;
+  layer.season = SEASON_INDEX[season];
+  layer.illumination = illumination;
   layer.invalidate();
 }
 
@@ -275,7 +275,7 @@ function frame(now: number): void {
   applySeason();
   if (world.lastHour !== lastHour) {
     lastHour = world.lastHour;
-    layer.invalidate();
+    layer.detectChanges();
   }
   if (world.stationsChanged) {
     world.stationsChanged = false;
@@ -306,7 +306,6 @@ function draw(): void {
   const cal = toCalendar(world.minutes);
   const season = seasonOf(cal.month);
   const hour = cal.hour + cal.minute / 60;
-  layer.render();
   const W = canvas.width;
   const H = canvas.height;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -321,10 +320,10 @@ function draw(): void {
   const z = cam.zoom;
   const ox = Math.round(-cam.x * z);
   const oy = Math.round(-cam.y * z);
+  // 静的レイヤー (チャンク) と動的レイヤー
   ctx.setTransform(z, 0, 0, z, ox, oy);
-  ctx.drawImage(layer.canvas, -layer.originX, -layer.originY);
+  layer.draw(ctx, null, cam.x, cam.y, cam.viewW, cam.viewH);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  // 列車など動くもの
   dyn.render(world, trains, cam.viewW, cam.viewH, cam.x, cam.y, SEASON_INDEX[season], currentIllumination);
   ctx.setTransform(z, 0, 0, z, 0, 0);
   ctx.drawImage(dyn.canvas, 0, 0);
@@ -341,7 +340,7 @@ function draw(): void {
   if (night > 0.05) {
     ctx.globalAlpha = Math.min(1, night * 1.2);
     ctx.setTransform(z, 0, 0, z, ox, oy);
-    ctx.drawImage(layer.emissive, -layer.originX, -layer.originY);
+    layer.drawEmissive(ctx, cam.x, cam.y, cam.viewW, cam.viewH);
     ctx.setTransform(z, 0, 0, z, 0, 0);
     ctx.drawImage(dyn.emissive, 0, 0);
     ctx.setTransform(1, 0, 0, 1, 0, 0);

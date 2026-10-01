@@ -316,51 +316,191 @@ export class TilePainter {
   }
 }
 
-/** マップ全体を 1 枚の静的レイヤーとして描き、更新があったときだけ描き直す。 */
+/** チャンク (CHUNK×CHUNK タイル) ごとの静的キャンバス */
+interface Chunk {
+  cx: number;
+  cy: number;
+  canvas: HTMLCanvasElement;
+  emissive: HTMLCanvasElement;
+  painter: TilePainter;
+  /** ワールド座標でのキャンバス左上 */
+  x0: number;
+  y0: number;
+  dirty: boolean;
+  lastUsed: number;
+}
+
+export const CHUNK = 32;
+/** 建物やタワーが上に伸びるぶんの余白 (px) */
+const CHUNK_TOP = 200;
+const CHUNK_BOTTOM = 40;
+const MAX_CHUNKS = 28;
+
+/**
+ * マップをチャンクに分けて描く静的レイヤー。見えている範囲だけ描き、
+ * 変化したタイルを含むチャンクだけ描き直す。
+ */
 export class MapLayer {
-  readonly canvas: HTMLCanvasElement;
-  readonly emissive: HTMLCanvasElement;
-  readonly painter: TilePainter;
-  readonly originX: number;
-  readonly originY: number;
-  dirty = true;
+  private chunks = new Map<string, Chunk>();
+  season: SeasonTint = 0;
+  illumination = false;
+  /** 変化検出用のスナップショット */
+  private snapKind: Uint8Array;
+  private snapState: Uint8Array;
+  private snapProgress: Uint8Array;
+  private snapLights: Uint8Array;
+  private snapLevel: Uint8Array;
+  private frame = 0;
 
   constructor(readonly world: World) {
-    this.originX = (world.h - 1) * HALF_W;
-    this.originY = 3 * LEVEL_H + 200;
-    const w = (world.w + world.h) * HALF_W;
-    const h = (world.w + world.h) * HALF_H + this.originY + 40;
-    this.canvas = document.createElement("canvas");
-    this.canvas.width = w;
-    this.canvas.height = h;
-    this.emissive = document.createElement("canvas");
-    this.emissive.width = w;
-    this.emissive.height = h;
-    const ctx = this.canvas.getContext("2d")!;
-    const ectx = this.emissive.getContext("2d")!;
-    ctx.imageSmoothingEnabled = false;
-    ectx.imageSmoothingEnabled = false;
-    this.painter = new TilePainter(world, ctx, ectx, this.originX, this.originY);
-    // GPU メモリ不足などでキャンバスの中身が失われたら描き直す
-    for (const c of [this.canvas, this.emissive]) {
-      c.addEventListener("contextrestored", () => this.invalidate());
-      c.addEventListener("contextlost", () => this.invalidate());
+    this.snapKind = new Uint8Array(world.kind);
+    this.snapState = new Uint8Array(world.bState);
+    this.snapProgress = new Uint8Array(world.bProgress);
+    this.snapLights = new Uint8Array(world.lights);
+    this.snapLevel = new Uint8Array(world.bLevel);
+  }
+
+  /** 全チャンクを捨てる (季節が変わったときなど) */
+  invalidate(): void {
+    for (const c of this.chunks.values()) c.dirty = true;
+  }
+
+  /** ワールドの変化を調べ、関係するチャンクを汚す。1 時間ごとなど、変化がありうるときに呼ぶ。 */
+  detectChanges(): void {
+    const w = this.world;
+    const n = w.w * w.h;
+    for (let i = 0; i < n; i++) {
+      if (
+        w.kind[i] !== this.snapKind[i] ||
+        w.bState[i] !== this.snapState[i] ||
+        w.bProgress[i] !== this.snapProgress[i] ||
+        w.lights[i] !== this.snapLights[i] ||
+        w.bLevel[i] !== this.snapLevel[i]
+      ) {
+        this.markTile(i % w.w, Math.floor(i / w.w));
+      }
+    }
+    this.snapKind.set(w.kind);
+    this.snapState.set(w.bState);
+    this.snapProgress.set(w.bProgress);
+    this.snapLights.set(w.lights);
+    this.snapLevel.set(w.bLevel);
+  }
+
+  private markTile(x: number, y: number): void {
+    const cx = Math.floor(x / CHUNK);
+    const cy = Math.floor(y / CHUNK);
+    // スプライトは上 (北西側) に伸びるので、北・西・北西のチャンクにも影響する
+    for (const [dx, dy] of [
+      [0, 0],
+      [-1, 0],
+      [0, -1],
+      [-1, -1],
+    ]) {
+      const c = this.chunks.get(`${cx + dx},${cy + dy}`);
+      if (c) c.dirty = true;
     }
   }
 
-  invalidate(): void {
-    this.dirty = true;
+  private chunkBounds(cx: number, cy: number): { x0: number; y0: number; w: number; h: number } {
+    const tx0 = cx * CHUNK;
+    const ty0 = cy * CHUNK;
+    const [ox] = tileOrigin(tx0, ty0 + CHUNK - 1);
+    const [, oy] = tileOrigin(tx0, ty0);
+    return { x0: ox, y0: oy - CHUNK_TOP, w: CHUNK * 2 * HALF_W, h: CHUNK * 2 * HALF_H + TILE_H + CHUNK_TOP + CHUNK_BOTTOM };
   }
 
-  render(): void {
-    if (!this.dirty) return;
-    this.dirty = false;
+  private getChunk(cx: number, cy: number): Chunk {
+    const key = `${cx},${cy}`;
+    let c = this.chunks.get(key);
+    if (!c) {
+      if (this.chunks.size >= MAX_CHUNKS) this.evict();
+      const b = this.chunkBounds(cx, cy);
+      const canvas = document.createElement("canvas");
+      canvas.width = b.w;
+      canvas.height = b.h;
+      const emissive = document.createElement("canvas");
+      emissive.width = b.w;
+      emissive.height = b.h;
+      const ctx = canvas.getContext("2d")!;
+      const ectx = emissive.getContext("2d")!;
+      ctx.imageSmoothingEnabled = false;
+      ectx.imageSmoothingEnabled = false;
+      const painter = new TilePainter(this.world, ctx, ectx, -b.x0, -b.y0);
+      c = { cx, cy, canvas, emissive, painter, x0: b.x0, y0: b.y0, dirty: true, lastUsed: this.frame };
+      for (const cv of [canvas, emissive]) {
+        cv.addEventListener("contextlost", () => (c!.dirty = true));
+        cv.addEventListener("contextrestored", () => (c!.dirty = true));
+      }
+      this.chunks.set(key, c);
+    }
+    return c;
+  }
+
+  private evict(): void {
+    let oldest: Chunk | null = null;
+    for (const c of this.chunks.values()) if (!oldest || c.lastUsed < oldest.lastUsed) oldest = c;
+    if (oldest) {
+      oldest.canvas.width = 0;
+      oldest.emissive.width = 0;
+      this.chunks.delete(`${oldest.cx},${oldest.cy}`);
+    }
+  }
+
+  private renderChunk(c: Chunk): void {
     const w = this.world;
-    this.painter.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-    this.painter.ectx.clearRect(0, 0, this.emissive.width, this.emissive.height);
-    for (let y = 0; y < w.h; y++) {
-      for (let x = 0; x < w.w; x++) {
-        this.painter.drawTile(x, y);
+    c.painter.season = this.season;
+    c.painter.illumination = this.illumination;
+    c.painter.ctx.clearRect(0, 0, c.canvas.width, c.canvas.height);
+    c.painter.ectx.clearRect(0, 0, c.emissive.width, c.emissive.height);
+    // このチャンクの範囲に描き込みうるタイル: 和 (tx+ty) と差 (tx-ty) の範囲で絞る
+    const tx0 = c.cx * CHUNK;
+    const ty0 = c.cy * CHUNK;
+    const s0 = tx0 + ty0;
+    const d0 = tx0 - (ty0 + CHUNK - 1);
+    const sMin = s0 - Math.ceil(CHUNK_BOTTOM / HALF_H);
+    const sMax = s0 + 2 * (CHUNK - 1) + Math.ceil(CHUNK_TOP / HALF_H) + 2;
+    const dMin = d0 - 2;
+    const dMax = d0 + 2 * (CHUNK - 1) + 1;
+    for (let sum = sMin; sum <= sMax; sum++) {
+      for (let diff = dMin; diff <= dMax; diff++) {
+        if ((sum + diff) % 2 !== 0) continue;
+        const tx = (sum + diff) / 2;
+        const ty = (sum - diff) / 2;
+        if (!inBounds(w, tx, ty)) continue;
+        c.painter.drawTile(tx, ty);
+      }
+    }
+    c.dirty = false;
+  }
+
+  /** 発光レイヤーだけ描く (draw の後に呼ぶ) */
+  drawEmissive(ectx: CanvasRenderingContext2D, viewX0: number, viewY0: number, viewW: number, viewH: number): void {
+    for (const c of this.chunks.values()) {
+      if (c.x0 + c.canvas.width < viewX0 || c.x0 > viewX0 + viewW || c.y0 + c.canvas.height < viewY0 || c.y0 > viewY0 + viewH) continue;
+      ectx.drawImage(c.emissive, c.x0, c.y0);
+    }
+  }
+
+  /** 見えているチャンクを (必要なら描いてから) ctx に描く。ctx には既にカメラ変換がかかっていること。 */
+  draw(ctx: CanvasRenderingContext2D, ectx: CanvasRenderingContext2D | null, viewX0: number, viewY0: number, viewW: number, viewH: number): void {
+    this.frame++;
+    const w = this.world;
+    const nx = Math.ceil(w.w / CHUNK);
+    const ny = Math.ceil(w.h / CHUNK);
+    let budget = 3; // 1 フレームに描き直すチャンク数の上限
+    for (let cy = 0; cy < ny; cy++) {
+      for (let cx = 0; cx < nx; cx++) {
+        const b = this.chunkBounds(cx, cy);
+        if (b.x0 + b.w < viewX0 || b.x0 > viewX0 + viewW || b.y0 + b.h < viewY0 || b.y0 > viewY0 + viewH) continue;
+        const c = this.getChunk(cx, cy);
+        c.lastUsed = this.frame;
+        if (c.dirty && budget > 0) {
+          this.renderChunk(c);
+          budget--;
+        }
+        ctx.drawImage(c.canvas, c.x0, c.y0);
+        if (ectx) ectx.drawImage(c.emissive, c.x0, c.y0);
       }
     }
   }

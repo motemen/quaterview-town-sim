@@ -4,8 +4,8 @@ import { MINUTES_PER_DAY, MINUTES_PER_REAL_SECOND, toCalendar } from "./time";
 import { World, createEmptyWorld } from "./world";
 import { computeLandValue, computePopulation } from "./growth";
 
-export function newWorld(seed: number): World {
-  const w = createEmptyWorld(seed);
+export function newWorld(seed: number, width?: number, height?: number): World {
+  const w = createEmptyWorld(seed, width, height);
   generateTerrain(w);
   computeLandValue(w, 0);
   computePopulation(w);

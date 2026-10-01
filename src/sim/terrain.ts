@@ -98,7 +98,8 @@ export function generateTerrain(w: World): void {
     }
   }
   // 池: 低地に小さな水たまりを 2〜4 個
-  const pondCount = 3 + Math.floor(hash2(seed, 5, 5) * 4);
+  const areaScale = (W * H) / 4096;
+  const pondCount = Math.round((3 + Math.floor(hash2(seed, 5, 5) * 4)) * areaScale);
   for (let n = 0; n < pondCount; n++) {
     const cx = 4 + Math.floor(hash2(seed + 61, n, 0) * (W - 8));
     const cy = 4 + Math.floor(hash2(seed + 62, n, 0) * (H - 8));
@@ -215,36 +216,44 @@ export function generateTerrain(w: World): void {
 
 function placeShrine(w: World): void {
   const S = w.w + 1;
-  let best = -1;
-  let bestScore = -Infinity;
-  for (let y = 2; y < w.h - 2; y++) {
-    for (let x = 2; x < w.w - 2; x++) {
-      const i = idx(w, x, y);
-      if (w.kind[i] !== Kind.Forest || !isFlat(w, x, y)) continue;
-      // 参道 (南側) も平らな陸地であること
-      const pi = idx(w, x, y + 1);
-      if (w.water[pi] || !isFlat(w, x, y + 1) || (w.kind[pi] !== Kind.Forest && w.kind[pi] !== Kind.Grass)) continue;
-      let forest = 0;
-      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) if (inBounds(w, x + dx, y + dy) && w.kind[idx(w, x + dx, y + dy)] === Kind.Forest) forest++;
-      const h = w.height[y * S + x];
-      // 駅からほどよく離れた、森に囲まれた高台
-      const d = w.stations.length ? Math.hypot(w.stations[0].x - x, w.stations[0].y - y) : 20;
-      const score = forest + h * 4 - Math.abs(d - 12) * 0.8 + hash2(w.seed, x, y) * 3;
-      if (score > bestScore) {
-        bestScore = score;
-        best = i;
+  const count = Math.max(1, Math.round(((w.w * w.h) / 4096) * 0.7));
+  const placed: [number, number][] = [];
+  for (let n = 0; n < count; n++) {
+    let best = -1;
+    let bestScore = -Infinity;
+    for (let y = 2; y < w.h - 2; y++) {
+      for (let x = 2; x < w.w - 2; x++) {
+        const i = idx(w, x, y);
+        if (w.kind[i] !== Kind.Forest || !isFlat(w, x, y)) continue;
+        // 参道 (南側) も平らな陸地であること
+        const pi = idx(w, x, y + 1);
+        if (w.water[pi] || !isFlat(w, x, y + 1) || (w.kind[pi] !== Kind.Forest && w.kind[pi] !== Kind.Grass)) continue;
+        // 既存の神社から離れていること
+        let tooClose = false;
+        for (const [sx, sy] of placed) if (Math.hypot(sx - x, sy - y) < 24) tooClose = true;
+        if (tooClose) continue;
+        let forest = 0;
+        for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) if (inBounds(w, x + dx, y + dy) && w.kind[idx(w, x + dx, y + dy)] === Kind.Forest) forest++;
+        const h = w.height[y * S + x];
+        const d = w.stations.length ? Math.hypot(w.stations[0].x - x, w.stations[0].y - y) : 20;
+        const score = forest + h * 4 - (n === 0 ? Math.abs(d - 12) * 0.8 : 0) + hash2(w.seed, x, y) * 3;
+        if (score > bestScore) {
+          bestScore = score;
+          best = i;
+        }
       }
     }
+    if (best < 0) return;
+    w.kind[best] = Kind.Shrine;
+    w.kind[best + w.w] = Kind.FarmPath; // 参道
+    placed.push([best % w.w, Math.floor(best / w.w)]);
   }
-  if (best < 0) return;
-  w.kind[best] = Kind.Shrine;
-  w.kind[best + w.w] = Kind.FarmPath; // 参道
 }
 
 function placeFarms(w: World): void {
   const S = w.w + 1;
   const rng = w.rng;
-  const patches = 26 + rng.int(10);
+  const patches = Math.round((26 + rng.int(10)) * ((w.w * w.h) / 4096));
   for (let n = 0; n < patches; n++) {
     const pw = 3 + rng.int(4);
     const ph = 3 + rng.int(4);

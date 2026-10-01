@@ -41,7 +41,8 @@ export class TrainSystem {
   stations: number[] = [];
   trains: Train[] = [];
   private spawnTimer = 2;
-  private nextDir: 1 | -1 = 1;
+  private nextDir: 1 | -1 = -1;
+  private batchLeft = 0;
   /** 踏切ごとの警報状態 (tile index → true) */
   activeCrossings = new Set<number>();
   blink = 0;
@@ -80,13 +81,26 @@ export class TrainSystem {
     }
     const margin = TRAIN_CARS * CAR_SPACING + 1;
     this.trains = this.trains.filter((t) => t.pos > -margin && t.pos < len - 1 + margin);
-    // 単線なので 1 本ずつ。人口が増えると間隔が短くなる
+    // 単線なので同じ向きの列車をまとめて走らせ、全部抜けたら向きを変える
     this.spawnTimer -= dtReal;
-    if (this.trains.length === 0 && this.spawnTimer <= 0) {
+    const maxTrains = Math.min(4, 1 + Math.floor(this.stations.length / 2) + Math.floor(len / 128));
+    if (this.trains.length === 0) {
+      if (this.spawnTimer <= 0) {
+        this.nextDir = this.nextDir === 1 ? -1 : 1;
+        this.batchLeft = maxTrains;
+        this.spawnOne(len, margin);
+        this.spawnTimer = Math.max(4, 16 - w.population / 800);
+      }
+    } else if (this.batchLeft > 0 && this.spawnTimer <= 0) {
+      // 先行列車が十分進んでから次を出す
       const dir = this.nextDir;
-      this.nextDir = dir === 1 ? -1 : 1;
-      this.trains.push({ pos: dir > 0 ? -margin + 0.5 : len - 1 + margin - 0.5, dir, cars: TRAIN_CARS, stopTimer: 0, lastStop: -1 });
-      this.spawnTimer = Math.max(4, 16 - w.population / 800);
+      const entry = dir > 0 ? -margin : len - 1 + margin;
+      let nearest = Infinity;
+      for (const t of this.trains) nearest = Math.min(nearest, Math.abs(t.pos - entry));
+      if (nearest > 45) {
+        this.spawnOne(len, margin);
+        this.spawnTimer = 3;
+      }
     }
     this.updateCrossings(w);
   }
@@ -105,6 +119,12 @@ export class TrainSystem {
         if (w.kind[i] === Kind.Crossing) this.activeCrossings.add(i);
       }
     }
+  }
+
+  private spawnOne(len: number, margin: number): void {
+    const dir = this.nextDir;
+    this.trains.push({ pos: dir > 0 ? -margin + 0.5 : len - 1 + margin - 0.5, dir, cars: TRAIN_CARS, stopTimer: 0, lastStop: -1 });
+    this.batchLeft--;
   }
 
   /** デバッグ用: 指定位置に列車を置く */

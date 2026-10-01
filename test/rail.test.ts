@@ -6,7 +6,7 @@ import { Kind, idx, isRailLike } from "../src/sim/world";
 
 describe("rail path", () => {
   it("walks the whole line from west to east", () => {
-    const w = newWorld(42);
+    const w = newWorld(42, 64, 64);
     const path = railPath(w);
     expect(path[0][0]).toBe(0);
     expect(path[path.length - 1][0]).toBe(w.w - 1);
@@ -22,7 +22,7 @@ describe("rail path", () => {
 
 describe("trains", () => {
   it("spawns a train and moves it along the line, stopping at the station", () => {
-    const w = newWorld(42);
+    const w = newWorld(42, 64, 64);
     const ts = new TrainSystem(w);
     for (let i = 0; i < 60; i++) ts.update(w, 0.1, 1); // 6 秒
     expect(ts.trains.length).toBe(1);
@@ -37,7 +37,7 @@ describe("trains", () => {
     expect(ts.trains.length === 0 || ts.trains[0].pos !== before).toBe(true);
   });
   it("gives each car a pose on the line", () => {
-    const w = newWorld(42);
+    const w = newWorld(42, 64, 64);
     const ts = new TrainSystem(w);
     ts.spawnAt(ts.stations[0], 1, 10);
     const poses = ts.carPoses(ts.trains[0]);
@@ -50,7 +50,7 @@ describe("trains", () => {
 
 describe("new stations", () => {
   it("opens a second station once the town has grown", () => {
-    const w = newWorld(7);
+    const w = newWorld(7, 64, 64);
     for (let day = 0; day < 400; day++) advance(w, 60, 1);
     // 成長の過程で自動的に増えているか、増えていなくても条件を満たせば増える
     const n = w.stations.length;

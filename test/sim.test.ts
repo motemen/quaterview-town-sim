@@ -18,7 +18,7 @@ describe("rng", () => {
 });
 
 describe("terrain", () => {
-  const w = newWorld(42);
+  const w = newWorld(42, 64, 64);
   it("keeps adjacent vertex heights within 1", () => {
     const S = w.w + 1;
     for (let y = 0; y < S; y++) {
@@ -61,7 +61,7 @@ describe("terrain", () => {
 
 describe("growth", () => {
   it("grows roads and buildings over a year", () => {
-    const w = newWorld(7);
+    const w = newWorld(7, 64, 64);
     for (let day = 0; day < 240; day++) advance(w, 60, 1);
     let roads = 0;
     let buildings = 0;
@@ -79,7 +79,7 @@ describe("growth", () => {
     expect(w.population).toBeGreaterThan(0);
   }, 30000);
   it("keeps roads connected (every road touches another road or station)", () => {
-    const w = newWorld(99);
+    const w = newWorld(99, 64, 64);
     for (let day = 0; day < 120; day++) advance(w, 60, 1);
     for (let y = 0; y < w.h; y++) {
       for (let x = 0; x < w.w; x++) {
@@ -97,7 +97,7 @@ describe("growth", () => {
     }
   }, 30000);
   it("never places roads or buildings on irregular slopes", () => {
-    const w = newWorld(5);
+    const w = newWorld(5, 64, 64);
     for (let day = 0; day < 200; day++) advance(w, 60, 1);
     for (let y = 0; y < w.h; y++) {
       for (let x = 0; x < w.w; x++) {
@@ -112,7 +112,7 @@ describe("growth", () => {
 
 describe("save", () => {
   it("round-trips a world", () => {
-    const w = newWorld(3);
+    const w = newWorld(3, 64, 64);
     for (let day = 0; day < 30; day++) advance(w, 60, 1);
     const json = serialize(w);
     const r = deserialize(json)!;

@@ -1,8 +1,8 @@
 import { Rng } from "./rng";
 import { START_MINUTES } from "./time";
 
-export const MAP_W = 64;
-export const MAP_H = 64;
+export const MAP_W = 256;
+export const MAP_H = 256;
 export const MAX_HEIGHT = 3;
 
 export const enum Kind {
