@@ -363,7 +363,8 @@ export function buildingSprite(spec: BuildingSpec): { base: Sprite; emissive: Sp
     const wallH = floors * fh;
     const x0 = HALF_W - fw / 2;
     const x1 = HALF_W + fw / 2;
-    const windowRows = fh - 3;
+    const windowRows = level === 1 ? 2 : fh - 3;
+    const windowTop = level === 1 ? 2 : 1;
 
     for (let x = x0; x < x1; x++) {
       const [ytR, ybR] = diamondRows(x, fw);
@@ -382,7 +383,7 @@ export function buildingSprite(spec: BuildingSpec): { base: Sprite; emissive: Sp
           const lit = !abandoned && !constructing && hash3(spec.lights, f, along >> 2, left ? 1 : 2) < (level === 1 ? 0.5 : 0.62);
           const boarded = abandoned && hash3(st, f, along >> 2, 7) < 0.5;
           const warm = hash3(spec.lights, f, along >> 2, 3) < 0.7;
-          for (let wy = 1; wy <= windowRows; wy++) {
+          for (let wy = windowTop; wy < windowTop + windowRows; wy++) {
             const y = fTop + wy;
             r.set(x, y, boarded ? shade(PAL.dirtDark, 0.8) : abandoned ? [60, 60, 64] : shade(PAL.windowDay, left ? 1 : 0.8));
             if (lit) {
@@ -408,15 +409,26 @@ export function buildingSprite(spec: BuildingSpec): { base: Sprite; emissive: Sp
       }
       // 屋根
       if (level === 1) {
-        // 切妻屋根: 棟は東西方向
+        // 切妻屋根: 棟は東西方向。列ごとに連続して塗る (持ち上げ量の差で穴が開かないように)
         const ridgeH = 4;
+        let last = -1;
         for (let y = yt - wallH; y <= yb - wallH; y++) {
           const A = (x + 0.5 - HALF_W) / (fw / 2);
           const B = (y + 0.5 - baseTop - HALF_H + wallH) / (fw / 4) + 1;
           const v = (B - A) / 2;
           const eh = Math.round(ridgeH * (1 - Math.abs(2 * v - 1)));
-          r.set(x, y - eh, v < 0.5 ? roofLight : shade(roof, 0.8));
+          const target = y - eh;
+          const color = v < 0.5 ? roofLight : shade(roof, 0.8);
+          if (last >= 0) {
+            const lo = Math.min(last + 1, target);
+            const hi = Math.max(last - 1, target);
+            for (let yy = lo; yy <= hi; yy++) r.set(x, yy, color);
+          }
+          r.set(x, target, color);
+          last = target;
         }
+        // 軒先の線
+        r.set(x, yb - wallH + 1, shade(roof, 0.6));
       } else {
         for (let y = yt - wallH; y <= yb - wallH; y++) {
           const edge = y === yt - wallH || y === yb - wallH;

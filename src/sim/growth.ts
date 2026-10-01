@@ -31,9 +31,9 @@ export const STATION_RADIUS = 22;
 export const MAX_BRIDGE_LEN = 5;
 
 export function levelForValue(v: number): number {
-  if (v < 28) return 1;
-  if (v < 52) return 2;
-  if (v < 82) return 3;
+  if (v < 40) return 1;
+  if (v < 62) return 2;
+  if (v < 88) return 3;
   return 4;
 }
 
@@ -68,7 +68,7 @@ export function computeLandValue(w: World, totalDays: number): void {
         const d = Math.hypot(x - s.x, y - s.y);
         best = Math.max(best, Math.max(0, 1 - d / STATION_RADIUS));
       }
-      v += 72 * Math.pow(best, 1.4);
+      v += 52 * Math.pow(best, 1.4);
       // 道路アクセス
       let roadAdj = false;
       for (let d = 0; d < 4; d++) {
@@ -95,7 +95,7 @@ export function computeLandValue(w: World, totalDays: number): void {
           }
         }
       }
-      v += Math.min(30, density * 1.2);
+      v += Math.min(48, density * 1.1);
       v += Math.min(12, amenity);
       // 眺望 (高台)
       v += w.height[y * S + x] * 2;
@@ -358,6 +358,7 @@ function growBuildings(w: World): void {
 
 function startConstruction(w: World, i: number, v: number): void {
   let level = levelForValue(v);
+  if (level > 1 && w.rng.chance(0.4)) level--;
   if (level > 1 && w.rng.chance(0.25)) level--;
   w.kind[i] = Kind.Building;
   w.bLevel[i] = level;
@@ -387,7 +388,7 @@ function stepBuilding(w: World, i: number): void {
   if (state === BState.Built) {
     if (target > level && w.bAge[i] > 25) {
       // 建て替え
-      if (w.rng.chance((0.03 * (target - level)) / 24)) demolish(w, i);
+      if (w.rng.chance((0.02 * (target - level)) / 24)) demolish(w, i);
     } else if (target < level - 1 || w.value[i] < 10) {
       // 衰退
       if (w.bAge[i] > 40 && w.rng.chance(0.04 / 24)) {

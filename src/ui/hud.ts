@@ -53,11 +53,13 @@ export class Hud {
 
   update(world: World): void {
     const c = toCalendar(world.minutes);
-    const text = `${c.year}年${c.month}月${c.day}日 (${SEASON_LABEL[seasonOf(c.month)]}) ${String(c.hour).padStart(2, "0")}:${String(c.minute).padStart(2, "0")} ${world.population}`;
+    const minute = Math.floor(c.minute / 10) * 10; // 10分刻み
+    const clock = `${String(c.hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+    const text = `${c.year}年${c.month}月${c.day}日 (${SEASON_LABEL[seasonOf(c.month)]}) ${clock} ${world.population}`;
     if (text === this.lastText) return;
     this.lastText = text;
     this.dateEl.textContent = `${c.year}年 ${c.month}月 ${c.day}日 (${SEASON_LABEL[seasonOf(c.month)]})`;
-    this.clockEl.textContent = `${String(c.hour).padStart(2, "0")}:${String(c.minute).padStart(2, "0")}`;
+    this.clockEl.textContent = clock;
     this.popEl.textContent = `人口 ${world.population.toLocaleString("ja-JP")}人`;
   }
 
