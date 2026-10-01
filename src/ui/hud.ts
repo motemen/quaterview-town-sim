@@ -35,9 +35,13 @@ export class Hud {
   constructor(
     private onSpeed: (speed: number) => void,
     onReset: () => void,
+    private onJump: (days: number) => void,
   ) {
     for (const b of this.speedButtons) {
       b.addEventListener("click", () => this.setSpeed(Number(b.dataset.speed)));
+    }
+    for (const b of document.querySelectorAll<HTMLButtonElement>("#hud button[data-jump]")) {
+      b.addEventListener("click", () => this.onJump(Number(b.dataset.jump)));
     }
     document.getElementById("btn-reset")!.addEventListener("click", onReset);
     window.addEventListener("keydown", (e) => {
@@ -47,6 +51,9 @@ export class Hud {
       } else if (e.key === "1") this.setSpeed(1);
       else if (e.key === "2") this.setSpeed(4);
       else if (e.key === "3") this.setSpeed(16);
+      else if (e.key === "j") this.onJump(1);
+      else if (e.key === "J") this.onJump(10);
+      else if (e.key === "l" || e.key === "L") this.onJump(30);
     });
   }
 
@@ -85,6 +92,11 @@ export class Hud {
     this.dateEl.textContent = `${c.year}年 ${c.month}月 ${c.day}日 (${SEASON_LABEL[seasonOf(c.month)]})`;
     this.clockEl.textContent = clock;
     this.popEl.textContent = `人口 ${world.population.toLocaleString("ja-JP")}人`;
+  }
+
+  /** 情報欄に一時的なメッセージを出す */
+  flash(text: string): void {
+    this.infoEl.textContent = text;
   }
 
   showTile(world: World, x: number, y: number): void {

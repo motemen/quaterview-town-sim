@@ -116,7 +116,20 @@ const hud = new Hud(
     url.searchParams.set("seed", String(randomSeed()));
     location.href = url.toString();
   },
+  (days) => jumpDays(days),
 );
+
+/** 時刻はそのままに、日数だけ一気に進める */
+function jumpDays(days: number): void {
+  const t0 = performance.now();
+  for (let d = 0; d < days; d++) advance(world, 60, 1);
+  trains.refresh(world);
+  world.stationsChanged = false;
+  layer.invalidate();
+  save(world);
+  const cal = toCalendar(world.minutes);
+  hud.flash(`${days}日進めました → ${cal.year}年${cal.month}月${cal.day}日 (${Math.round(performance.now() - t0)}ms)`);
+}
 
 function resize(): void {
   const dpr = 1; // ドット絵なので CSS ピクセル単位で描く
