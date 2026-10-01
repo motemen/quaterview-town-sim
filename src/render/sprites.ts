@@ -467,11 +467,49 @@ function paintRail(r: Raster, mask: number, bridge: boolean, dy = 0, withBallast
   }
 }
 
+export const RAIL_BRIDGE_LIFT = 4;
+
 export function railSprite(mask: number, bridge: boolean, season: SeasonTint = 0): Sprite {
   return cache.get(`rl:${mask}:${bridge ? 1 : 0}:${season}`, () => {
-    const r = new Raster(TILE_W, TILE_H);
-    paintRail(r, mask, bridge, 0, true, season);
-    return toSprite(r, 0, 0);
+    if (!bridge) {
+      const r = new Raster(TILE_W, TILE_H);
+      paintRail(r, mask, bridge, 0, true, season);
+      return toSprite(r, 0, 0);
+    }
+    // 鉄橋: 桁を少し持ち上げ、橋脚と側桁 (トラス) を描く
+    const DY = 12;
+    const lift = RAIL_BRIDGE_LIFT;
+    const r = new Raster(TILE_W, TILE_H + DY);
+    const alongX = (mask & (DIR_E | DIR_W)) !== 0;
+    const steel: RGB = [150, 64, 52];
+    const steelDark: RGB = [104, 44, 36];
+    const pier: RGB = [120, 120, 112];
+    // 橋脚 (桁の下、水面まで)
+    for (const t of [0.22, 0.78]) {
+      for (const side of [-0.16, 0.16]) {
+        const [px, py] = alongX ? uvToPixel(t, 0.5 + side) : uvToPixel(0.5 + side, t);
+        r.vline(Math.floor(px), Math.floor(py) + DY - lift, Math.floor(py) + DY + 1, pier);
+      }
+    }
+    // 桁 (デッキ)
+    forEachDiamondPixel((x, y, u, v) => {
+      if (inBand(u, v, 0.24, mask)) r.set(x, y + DY - lift, hash2(mask + 7, x, y) < 0.1 ? shade(PAL.concreteDark, 0.9) : PAL.concreteDark);
+    });
+    paintRail(r, mask, true, DY - lift, false, season);
+    // 側桁: 両側に低いトラス
+    for (const side of [-0.25, 0.25]) {
+      for (let t = 0; t <= 1; t += 1 / 48) {
+        const [px, py] = alongX ? uvToPixel(t, 0.5 + side) : uvToPixel(0.5 + side, t);
+        const gx = Math.floor(px);
+        const gy = Math.floor(py) + DY - lift;
+        r.set(gx, gy - 4, steel);
+        r.set(gx, gy, steelDark);
+        const k = Math.floor(t * 8);
+        if (Math.abs(t * 8 - k) < 0.03) r.vline(gx, gy - 4, gy, side < 0 ? steelDark : steel);
+        else if (((t * 8) % 1 > 0.45 && (t * 8) % 1 < 0.55)) r.set(gx, gy - 2, steel);
+      }
+    }
+    return toSprite(r, 0, DY);
   });
 }
 
@@ -691,10 +729,12 @@ function houseSprite(spec: BuildingSpec): { base: Sprite; emissive: Sprite | nul
       }
       r.set(x, yb - wallH + 1, shade(roof, 0.6));
     } else if (constructing) {
-      // 足場
+      // 建前: 木の柱と梁
       const top = yb - (floors + 1) * fh + 1;
+      const wood: RGB = [184, 140, 92];
+      const woodDark: RGB = [140, 100, 64];
       for (let y = top; y <= yb - floors * fh; y++) {
-        if (along % 3 === 0 || (y - top) % 3 === 0) r.set(x, y, PAL.scaffold);
+        if (along % 4 === 0 || y === top || y === top + 1) r.set(x, y, left ? wood : woodDark);
       }
     }
   }

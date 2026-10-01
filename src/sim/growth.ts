@@ -191,6 +191,8 @@ interface RoadCandidate {
   tiles: number[]; // 変換するタイル index の列 (順番に)
   kinds: Kind[];
   weight: number;
+  from: number;
+  dir: number;
 }
 
 /** 道路の延伸候補を調べる。延伸できなければ null。 */
@@ -264,11 +266,41 @@ export function roadExtension(w: World, x: number, y: number, dir: number): { ti
 
 function growRoads(w: World): void {
   const { roads, buildings } = countKinds(w);
-  let perDay = Math.min(3, 0.6 + buildings / 40);
-  if (roads > buildings * 1.0 + 16) perDay *= 0.3;
+  let perDay = Math.min(1.5, 0.35 + buildings / 80);
+  if (roads > buildings * 0.9 + 14) perDay *= 0.3;
   let attempts = Math.floor(perDay / 24);
   if (w.rng.chance(perDay / 24 - attempts)) attempts++;
   for (let a = 0; a < attempts; a++) extendRoadOnce(w);
+}
+
+/** (x,y) から dir 方向に見て、道路が何マス続いているか */
+function straightRunLength(w: World, x: number, y: number, dir: number): number {
+  let n = 0;
+  let cx = x + DX[dir];
+  let cy = y + DY[dir];
+  while (inBounds(w, cx, cy) && w.kind[idx(w, cx, cy)] === Kind.Road && n < 50) {
+    n++;
+    cx += DX[dir];
+    cy += DY[dir];
+  }
+  return n;
+}
+
+/** 近く (along 方向の前後 dist マス) に交差点や曲がり角があるか */
+function nearJunction(w: World, x: number, y: number, dist: number): boolean {
+  for (let d = 0; d < 4; d++) {
+    let cx = x;
+    let cy = y;
+    for (let k = 1; k <= dist; k++) {
+      cx += DX[d];
+      cy += DY[d];
+      if (!inBounds(w, cx, cy) || w.kind[idx(w, cx, cy)] !== Kind.Road) break;
+      const conn = roadConnections(w, cx, cy);
+      const straight = conn === (DIR_N | DIR_S) || conn === (DIR_E | DIR_W);
+      if (!straight) return true;
+    }
+  }
+  return false;
 }
 
 function extendRoadOnce(w: World): void {
@@ -280,6 +312,7 @@ function extendRoadOnce(w: World): void {
       if (w.kind[i] !== Kind.Road) continue;
       const conn = roadConnections(w, x, y);
       const degree = popcount(conn);
+      const isStraightMid = degree === 2 && (conn === (DIR_N | DIR_S) || conn === (DIR_E | DIR_W));
       for (let d = 0; d < 4; d++) {
         if (conn & [DIR_N, DIR_E, DIR_S, DIR_W][d]) continue;
         const ext = roadExtension(w, x, y, d);
@@ -288,20 +321,35 @@ function extendRoadOnce(w: World): void {
         let weight = 1 + w.value[last] / 16;
         const oppositeBit = [DIR_S, DIR_W, DIR_N, DIR_E][d];
         const straight = (conn & oppositeBit) !== 0;
-        if (straight && degree === 1) weight *= 8; // 行き止まりの先へまっすぐ
-        else if (straight) weight *= 1.5; // 十字路・T字路から直進
-        else if (degree === 2 && (conn === (DIR_N | DIR_S) || conn === (DIR_E | DIR_W))) weight *= 0.12; // 直線道路からの枝分かれ
-        else weight *= 0.3; // 曲がる
+        if (straight && degree === 1) {
+          // 行き止まりの先へまっすぐ。長い通りほど続きやすい
+          weight *= 10 + Math.min(10, straightRunLength(w, x, y, (d + 2) % 4));
+        } else if (straight) {
+          weight *= 2; // 交差点から直進
+        } else if (degree === 1) {
+          // 行き止まりで曲がる: まっすぐ進めないときだけ
+          const ahead = (d + 2) % 4; // 来た方向の反対 = 直進方向を求める
+          void ahead;
+          const fromDir = [DIR_N, DIR_E, DIR_S, DIR_W].indexOf(conn);
+          const straightDir = (fromDir + 2) % 4;
+          const canGoStraight = roadExtension(w, x, y, straightDir) !== null;
+          weight *= canGoStraight ? 0.05 : 0.6;
+        } else if (isStraightMid) {
+          // 直線道路からの枝分かれ: 交差点や角から離れているところだけ
+          weight *= nearJunction(w, x, y, 3) ? 0.01 : 0.25;
+        } else {
+          weight *= 0.05; // 交差点や角からさらに曲がる
+        }
         if (ext.tiles.length > 1) weight *= 0.5; // 橋・踏切はやや珍しい
-        // 2マス隣に平行な道路があると街区が狭すぎるので抑える
+        // 2〜3 マス隣に平行な道路があると街区が狭すぎるので抑える
         const lx = last % w.w;
         const ly = Math.floor(last / w.w);
         const px = d === 0 || d === 2 ? 2 : 0;
         const py = d === 1 || d === 3 ? 2 : 0;
         for (const sgn of [-1, 1]) {
           for (const [dist, pen] of [
-            [2, 0.04],
-            [3, 0.3],
+            [2, 0.02],
+            [3, 0.2],
           ] as const) {
             const qx = lx + (px / 2) * dist * sgn;
             const qy = ly + (py / 2) * dist * sgn;
@@ -309,7 +357,7 @@ function extendRoadOnce(w: World): void {
           }
         }
         if (w.kind[last] === Kind.Forest) weight *= 0.7;
-        candidates.push({ tiles: ext.tiles, kinds: ext.kinds, weight });
+        candidates.push({ tiles: ext.tiles, kinds: ext.kinds, weight, from: i, dir: d });
         totalWeight += weight;
       }
     }
@@ -322,6 +370,21 @@ function extendRoadOnce(w: World): void {
       for (let k = 0; k < c.tiles.length; k++) {
         w.kind[c.tiles[k]] = c.kinds[k];
         w.lotTimer[c.tiles[k]] = 0;
+      }
+      // まっすぐ伸びる場合は、何マスか続けて伸ばして長い通りにする
+      const extra = 1 + w.rng.int(4);
+      let cx = c.tiles[c.tiles.length - 1] % w.w;
+      let cy = Math.floor(c.tiles[c.tiles.length - 1] / w.w);
+      for (let k = 0; k < extra; k++) {
+        const ext = roadExtension(w, cx, cy, c.dir);
+        if (!ext || ext.tiles.length !== 1) break;
+        const ti = ext.tiles[0];
+        w.kind[ti] = Kind.Road;
+        w.lotTimer[ti] = 0;
+        cx = ti % w.w;
+        cy = Math.floor(ti / w.w);
+        // 別の道路に突き当たったら止まる
+        if (popcount(roadConnections(w, cx, cy)) > 1) break;
       }
       return;
     }

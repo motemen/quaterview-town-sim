@@ -13,6 +13,7 @@ import {
   crossingSprite,
   gateSprite,
   groundSprite,
+  RAIL_BRIDGE_LIFT,
   railSprite,
   roadEmissive,
   roadSprite,
@@ -251,7 +252,9 @@ export class TilePainter {
     const c = cornerHeights(w, tx, ty);
     const u = pose.tx - tx + 0.5;
     const v = pose.ty - ty + 0.5;
-    const h = heightAt(c, u, v) * LEVEL_H;
+    let h = heightAt(c, u, v) * LEVEL_H;
+    // 鉄橋の上は桁のぶん高い
+    if (w.water[idx(w, tx, ty)] && w.kind[idx(w, tx, ty)] === Kind.Rail) h += RAIL_BRIDGE_LIFT;
     const [sx, sy] = this.tileScreen(tx, ty);
     const [lx, ly] = uvToPixel(u, v);
     return [Math.round(sx + lx), Math.round(sy + ly - h)];
