@@ -1,0 +1,425 @@
+import { fbm } from "./rng";
+import {
+  BState,
+  DX,
+  DY,
+  DIR_E,
+  DIR_N,
+  DIR_S,
+  DIR_W,
+  Kind,
+  World,
+  idx,
+  inBounds,
+  isBuildableGround,
+  isFlat,
+  isRoadLike,
+  passableAlong,
+  railConnections,
+  roadConnections,
+  cornerHeights,
+} from "./world";
+
+/** 建物レベルごとの人口 */
+export const LEVEL_CAPACITY = [0, 4, 14, 40, 120] as const;
+/** 建設にかかる日数 */
+export const CONSTRUCTION_DAYS = [0, 3, 5, 9, 14] as const;
+/** 建物レベルごとの階数 (描画用) */
+export const LEVEL_FLOORS = [0, 1, 2, 5, 10] as const;
+
+export const STATION_RADIUS = 22;
+export const MAX_BRIDGE_LEN = 5;
+
+export function levelForValue(v: number): number {
+  if (v < 28) return 1;
+  if (v < 52) return 2;
+  if (v < 82) return 3;
+  return 4;
+}
+
+/** 1ゲーム時間ごとに呼ぶ。hour は 0..23。 */
+export function hourlyStep(w: World, hour: number, totalDays: number): void {
+  if (hour === 0) {
+    computeLandValue(w, totalDays);
+    dailyAging(w);
+    computePopulation(w);
+  }
+  if (hour === 18) rerollLights(w);
+  growRoads(w);
+  growBuildings(w);
+}
+
+export function computeLandValue(w: World, totalDays: number): void {
+  const years = totalDays / 360;
+  const W = w.w;
+  const H = w.h;
+  const S = W + 1;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = idx(w, x, y);
+      if (w.water[i]) {
+        w.value[i] = 0;
+        continue;
+      }
+      let v = 0;
+      // 駅の影響
+      let best = 0;
+      for (const s of w.stations) {
+        const d = Math.hypot(x - s.x, y - s.y);
+        best = Math.max(best, Math.max(0, 1 - d / STATION_RADIUS));
+      }
+      v += 72 * Math.pow(best, 1.4);
+      // 道路アクセス
+      let roadAdj = false;
+      for (let d = 0; d < 4; d++) {
+        const nx = x + DX[d];
+        const ny = y + DY[d];
+        if (inBounds(w, nx, ny) && isRoadLike(w.kind[idx(w, nx, ny)])) roadAdj = true;
+      }
+      if (roadAdj) v += 10;
+      // 周囲の密度 (5x5)
+      let density = 0;
+      let amenity = 0;
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (!inBounds(w, nx, ny)) continue;
+          const j = idx(w, nx, ny);
+          const k = w.kind[j];
+          if (k === Kind.Building && w.bState[j] === BState.Built) density += w.bLevel[j];
+          else if (k === Kind.Building && w.bState[j] === BState.Abandoned) density -= 1;
+          if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) {
+            if (k === Kind.Water || k === Kind.Park) amenity += 5;
+          }
+        }
+      }
+      v += Math.min(30, density * 1.2);
+      v += Math.min(12, amenity);
+      // 眺望 (高台)
+      v += w.height[y * S + x] * 2;
+      // 流行の移り変わり: ゆっくり動くノイズ
+      v += (fbm(w.seed + 500, x / 12 + years * 0.35, y / 12 - years * 0.2, 2) - 0.5) * 44;
+      w.value[i] = Math.max(0, Math.min(255, Math.round(v)));
+    }
+  }
+}
+
+function dailyAging(w: World): void {
+  const n = w.w * w.h;
+  for (let i = 0; i < n; i++) {
+    const k = w.kind[i];
+    if (k === Kind.Building) {
+      if (w.bState[i] === BState.Built && w.bAge[i] < 65000) w.bAge[i]++;
+      if (w.bState[i] === BState.Abandoned && w.lotTimer[i] < 255) w.lotTimer[i]++;
+    } else if (k === Kind.Lot) {
+      if (w.lotTimer[i] < 255) w.lotTimer[i]++;
+    }
+  }
+}
+
+export function computePopulation(w: World): void {
+  let pop = 0;
+  const n = w.w * w.h;
+  for (let i = 0; i < n; i++) {
+    if (w.kind[i] === Kind.Building && w.bState[i] === BState.Built) {
+      pop += LEVEL_CAPACITY[w.bLevel[i]];
+    }
+  }
+  w.population = pop;
+}
+
+function rerollLights(w: World): void {
+  const n = w.w * w.h;
+  for (let i = 0; i < n; i++) {
+    if (w.kind[i] === Kind.Building && w.rng.chance(0.3)) w.lights[i] = w.rng.int(256);
+  }
+}
+
+function countKinds(w: World): { roads: number; buildings: number } {
+  let roads = 0;
+  let buildings = 0;
+  const n = w.w * w.h;
+  for (let i = 0; i < n; i++) {
+    const k = w.kind[i];
+    if (k === Kind.Road) roads++;
+    else if (k === Kind.Building && w.bState[i] !== BState.Abandoned) buildings++;
+  }
+  return { roads, buildings };
+}
+
+interface RoadCandidate {
+  tiles: number[]; // 変換するタイル index の列 (順番に)
+  kinds: Kind[];
+  weight: number;
+}
+
+/** 道路の延伸候補を調べる。延伸できなければ null。 */
+export function roadExtension(w: World, x: number, y: number, dir: number): { tiles: number[]; kinds: Kind[] } | null {
+  const tx = x + DX[dir];
+  const ty = y + DY[dir];
+  if (!inBounds(w, tx, ty)) return null;
+  const ti = idx(w, tx, ty);
+  const k = w.kind[ti];
+  const srcBit = [DIR_S, DIR_W, DIR_N, DIR_E][dir]; // target から見た source の方向ビット
+  const aheadBit = [DIR_N, DIR_E, DIR_S, DIR_W][dir];
+
+  const shapeOk = (px: number, py: number): boolean => {
+    const m = roadConnections(w, px, py) & ~srcBit;
+    return m === 0 || m === aheadBit;
+  };
+
+  if (k === Kind.Water) {
+    // 橋: まっすぐ水面を渡って対岸へ
+    const tiles: number[] = [];
+    const kinds: Kind[] = [];
+    let cx = tx;
+    let cy = ty;
+    let len = 0;
+    while (inBounds(w, cx, cy) && w.kind[idx(w, cx, cy)] === Kind.Water) {
+      tiles.push(idx(w, cx, cy));
+      kinds.push(Kind.Road);
+      len++;
+      if (len > MAX_BRIDGE_LEN) return null;
+      cx += DX[dir];
+      cy += DY[dir];
+    }
+    if (!inBounds(w, cx, cy)) return null;
+    const li = idx(w, cx, cy);
+    if (!isBuildableGround(w.kind[li])) return null;
+    if (!passableAlong(w, cx, cy, dir)) return null;
+    // 対岸: 橋の手前を source とみなす
+    const m = roadConnections(w, cx, cy);
+    if (m !== 0 && m !== aheadBit) return null;
+    tiles.push(li);
+    kinds.push(Kind.Road);
+    return { tiles, kinds };
+  }
+
+  if (k === Kind.Rail) {
+    const rc = railConnections(w, tx, ty);
+    const alongX = (rc & (DIR_E | DIR_W)) !== 0 && (rc & (DIR_N | DIR_S)) === 0;
+    const alongY = (rc & (DIR_N | DIR_S)) !== 0 && (rc & (DIR_E | DIR_W)) === 0;
+    const perpendicular = (alongX && (dir === 0 || dir === 2)) || (alongY && (dir === 1 || dir === 3));
+    if (!perpendicular) return null;
+    if (!isFlat(w, tx, ty)) return null;
+    const bx = tx + DX[dir];
+    const by = ty + DY[dir];
+    if (!inBounds(w, bx, by)) return null;
+    const bi = idx(w, bx, by);
+    if (!isBuildableGround(w.kind[bi])) return null;
+    if (!passableAlong(w, bx, by, dir)) return null;
+    const m = roadConnections(w, bx, by);
+    if (m !== 0 && m !== aheadBit) return null;
+    return { tiles: [ti, bi], kinds: [Kind.Crossing, Kind.Road] };
+  }
+
+  if (isBuildableGround(k)) {
+    if (!passableAlong(w, tx, ty, dir)) return null;
+    if (!shapeOk(tx, ty)) return null;
+    // 線路に隣接して平行に走る道は避ける
+    return { tiles: [ti], kinds: [Kind.Road] };
+  }
+  return null;
+}
+
+function growRoads(w: World): void {
+  const { roads, buildings } = countKinds(w);
+  let perDay = Math.min(4, 0.7 + buildings / 30);
+  if (roads > buildings * 1.3 + 14) perDay *= 0.2;
+  let attempts = Math.floor(perDay / 24);
+  if (w.rng.chance(perDay / 24 - attempts)) attempts++;
+  for (let a = 0; a < attempts; a++) extendRoadOnce(w);
+}
+
+function extendRoadOnce(w: World): void {
+  const candidates: RoadCandidate[] = [];
+  let totalWeight = 0;
+  for (let y = 0; y < w.h; y++) {
+    for (let x = 0; x < w.w; x++) {
+      const i = idx(w, x, y);
+      if (w.kind[i] !== Kind.Road) continue;
+      const conn = roadConnections(w, x, y);
+      const degree = popcount(conn);
+      for (let d = 0; d < 4; d++) {
+        if (conn & [DIR_N, DIR_E, DIR_S, DIR_W][d]) continue;
+        const ext = roadExtension(w, x, y, d);
+        if (!ext) continue;
+        const last = ext.tiles[ext.tiles.length - 1];
+        let weight = 1 + w.value[last] / 16;
+        const oppositeBit = [DIR_S, DIR_W, DIR_N, DIR_E][d];
+        const straight = (conn & oppositeBit) !== 0;
+        if (straight && degree === 1) weight *= 4; // 行き止まりの先へまっすぐ
+        else if (straight) weight *= 1.2; // 十字路・T字路から直進
+        else if (degree === 2 && (conn === (DIR_N | DIR_S) || conn === (DIR_E | DIR_W))) weight *= 0.35; // 直線道路からの枝分かれ
+        else weight *= 0.8;
+        if (ext.tiles.length > 1) weight *= 0.5; // 橋・踏切はやや珍しい
+        // 2マス隣に平行な道路があると街区が狭すぎるので抑える
+        const lx = last % w.w;
+        const ly = Math.floor(last / w.w);
+        const px = d === 0 || d === 2 ? 2 : 0;
+        const py = d === 1 || d === 3 ? 2 : 0;
+        for (const sgn of [-1, 1]) {
+          const qx = lx + px * sgn;
+          const qy = ly + py * sgn;
+          if (inBounds(w, qx, qy) && w.kind[idx(w, qx, qy)] === Kind.Road) weight *= 0.2;
+        }
+        if (w.kind[last] === Kind.Forest) weight *= 0.7;
+        candidates.push({ tiles: ext.tiles, kinds: ext.kinds, weight });
+        totalWeight += weight;
+      }
+    }
+  }
+  if (candidates.length === 0) return;
+  let r = w.rng.next() * totalWeight;
+  for (const c of candidates) {
+    r -= c.weight;
+    if (r <= 0) {
+      for (let k = 0; k < c.tiles.length; k++) {
+        w.kind[c.tiles[k]] = c.kinds[k];
+        w.lotTimer[c.tiles[k]] = 0;
+      }
+      return;
+    }
+  }
+}
+
+function popcount(m: number): number {
+  let c = 0;
+  while (m) {
+    c += m & 1;
+    m >>= 1;
+  }
+  return c;
+}
+
+function growBuildings(w: World): void {
+  const W = w.w;
+  const H = w.h;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = idx(w, x, y);
+      const k = w.kind[i];
+      if (k === Kind.Building) {
+        stepBuilding(w, i);
+        continue;
+      }
+      if (k === Kind.Forest) {
+        // 市街地に囲まれた森は公園になる
+        let urban = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (!inBounds(w, nx, ny)) continue;
+            const nk = w.kind[idx(w, nx, ny)];
+            if (nk === Kind.Building || nk === Kind.Road) urban++;
+          }
+        }
+        if (urban >= 4 && w.rng.chance(0.08 / 24)) w.kind[i] = Kind.Park;
+      }
+      if (!isBuildableGround(k)) continue;
+      if (!isFlat(w, x, y)) continue;
+      // 道路までの距離 (1 = 隣接, 2 = 1マス挟む)
+      let roadDist = 0;
+      for (let d = 0; d < 4 && roadDist !== 1; d++) {
+        const nx = x + DX[d];
+        const ny = y + DY[d];
+        if (!inBounds(w, nx, ny)) continue;
+        const nk = w.kind[idx(w, nx, ny)];
+        if (nk === Kind.Road) roadDist = 1;
+        else if (roadDist === 0 && nk === Kind.Building) {
+          for (let e = 0; e < 4; e++) {
+            const mx = nx + DX[e];
+            const my = ny + DY[e];
+            if (inBounds(w, mx, my) && w.kind[idx(w, mx, my)] === Kind.Road) roadDist = 2;
+          }
+        }
+      }
+      if (roadDist === 0) {
+        if (k === Kind.Lot && w.lotTimer[i] > 60 && w.rng.chance(0.1 / 24)) w.kind[i] = Kind.Grass;
+        continue;
+      }
+      const v = w.value[i];
+      let pDay = Math.pow(v / 100, 2) * 0.6;
+      if (roadDist === 2) pDay *= 0.4;
+      if (k === Kind.Lot) pDay *= 3;
+      if (k === Kind.Forest) pDay *= 0.6;
+      if (v < 8) pDay = 0;
+      if (w.rng.chance(pDay / 24)) {
+        startConstruction(w, i, v);
+      } else if (k === Kind.Lot && w.lotTimer[i] > 90 && w.rng.chance(0.05 / 24)) {
+        w.kind[i] = Kind.Grass;
+      }
+    }
+  }
+}
+
+function startConstruction(w: World, i: number, v: number): void {
+  let level = levelForValue(v);
+  if (level > 1 && w.rng.chance(0.25)) level--;
+  w.kind[i] = Kind.Building;
+  w.bLevel[i] = level;
+  w.bStyle[i] = w.rng.int(256);
+  w.bState[i] = BState.Constructing;
+  w.bProgress[i] = 0;
+  w.bAge[i] = 0;
+  w.lotTimer[i] = 0;
+  w.lights[i] = w.rng.int(256);
+}
+
+function stepBuilding(w: World, i: number): void {
+  const state = w.bState[i];
+  const level = w.bLevel[i];
+  if (state === BState.Constructing) {
+    const perHour = 255 / (CONSTRUCTION_DAYS[level] * 24);
+    const p = w.bProgress[i] + perHour;
+    if (p >= 255) {
+      w.bProgress[i] = 255;
+      w.bState[i] = BState.Built;
+    } else {
+      w.bProgress[i] = p;
+    }
+    return;
+  }
+  const target = levelForValue(w.value[i]);
+  if (state === BState.Built) {
+    if (target > level && w.bAge[i] > 25) {
+      // 建て替え
+      if (w.rng.chance((0.03 * (target - level)) / 24)) demolish(w, i);
+    } else if (target < level - 1 || w.value[i] < 10) {
+      // 衰退
+      if (w.bAge[i] > 40 && w.rng.chance(0.04 / 24)) {
+        w.bState[i] = BState.Abandoned;
+        w.lotTimer[i] = 0;
+      }
+    }
+    return;
+  }
+  if (state === BState.Abandoned) {
+    if (target >= level && w.rng.chance(0.08 / 24)) {
+      // 再利用
+      w.bState[i] = BState.Built;
+      w.bAge[i] = 0;
+    } else if (w.lotTimer[i] > 15 && w.rng.chance(0.06 / 24)) {
+      demolish(w, i);
+    }
+  }
+}
+
+function demolish(w: World, i: number): void {
+  w.kind[i] = Kind.Lot;
+  w.bState[i] = BState.None;
+  w.bLevel[i] = 0;
+  w.lotTimer[i] = 0;
+}
+
+/** 建物の見た目上の階数 (建設中は進捗に応じて) */
+export function visibleFloors(w: World, i: number): number {
+  const total = LEVEL_FLOORS[w.bLevel[i]];
+  if (w.bState[i] !== BState.Constructing) return total;
+  return Math.min(total, Math.floor((w.bProgress[i] / 255) * (total + 1)));
+}
+
+export { cornerHeights };

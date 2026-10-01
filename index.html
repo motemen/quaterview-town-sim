@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>箱庭都市</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link href="https://fonts.googleapis.com/css2?family=DotGothic16&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <div id="hud">
+      <span id="hud-date"></span>
+      <span id="hud-clock"></span>
+      <span id="hud-pop"></span>
+      <span id="hud-info"></span>
+      <span class="spacer"></span>
+      <button data-speed="0" title="一時停止">❚❚</button>
+      <button data-speed="1" class="active">x1</button>
+      <button data-speed="4">x4</button>
+      <button data-speed="16">x16</button>
+      <button id="btn-reset" title="新しい街を始める">RESET</button>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

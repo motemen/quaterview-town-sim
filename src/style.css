@@ -1,0 +1,47 @@
+:root {
+  --hud-bg: #1a1a2e;
+  --hud-fg: #e8e4d0;
+  --hud-accent: #f0c040;
+}
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #000;
+  overflow: hidden;
+  font-family: "DotGothic16", "MS Gothic", monospace;
+  color: var(--hud-fg);
+}
+#view {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  image-rendering: pixelated;
+  cursor: grab;
+}
+#view.dragging { cursor: grabbing; }
+#hud {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 4px 12px;
+  background: var(--hud-bg);
+  border-top: 2px solid #3a3a5e;
+  font-size: 16px;
+  line-height: 24px;
+  user-select: none;
+  white-space: nowrap;
+}
+#hud .spacer { flex: 1; }
+#hud #hud-info { color: var(--hud-accent); overflow: hidden; text-overflow: ellipsis; }
+#hud button {
+  font: inherit;
+  color: var(--hud-fg);
+  background: #2a2a4e;
+  border: 2px solid #4a4a7e;
+  padding: 0 8px;
+  cursor: pointer;
+}
+#hud button.active { background: var(--hud-accent); color: #1a1a2e; border-color: var(--hud-accent); }
+#hud button:hover { filter: brightness(1.2); }
