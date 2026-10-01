@@ -398,9 +398,41 @@ function paintRoad(r: Raster, mask: number, bridge: boolean, dy = 0, season: Sea
 
 export function roadSprite(mask: number, bridge: boolean, season: SeasonTint = 0): Sprite {
   return cache.get(`r:${mask}:${bridge ? 1 : 0}:${season}`, () => {
-    const r = new Raster(TILE_W, TILE_H);
-    paintRoad(r, mask, bridge, 0, season);
-    return toSprite(r, 0, 0);
+    if (!bridge) {
+      const r = new Raster(TILE_W, TILE_H);
+      paintRoad(r, mask, false, 0, season);
+      return toSprite(r, 0, 0);
+    }
+    // 橋: 少し持ち上げた桁、欄干、橋脚
+    const lift = 3;
+    const DY = lift + 6;
+    const r = new Raster(TILE_W, TILE_H + DY);
+    const alongX = (mask & (DIR_E | DIR_W)) !== 0;
+    const pier: RGB = [112, 112, 108];
+    for (const t of [0.2, 0.8]) {
+      for (const side of [-0.2, 0.2]) {
+        const [px, py] = alongX ? uvToPixel(t, 0.5 + side) : uvToPixel(0.5 + side, t);
+        r.vline(Math.floor(px), Math.floor(py) + DY - lift, Math.floor(py) + DY + 1, pier);
+      }
+    }
+    forEachDiamondPixel((x, y, u, v) => {
+      if (inBand(u, v, ROAD_HW, mask)) r.set(x, y + DY - lift, hash2(mask, x, y) < 0.05 ? PAL.roadDark : PAL.road);
+      else if (inBand(u, v, WALK_HW, mask)) r.set(x, y + DY - lift, PAL.concreteDark);
+    });
+    // 欄干
+    const rail: RGB = [220, 220, 212];
+    const railDark: RGB = [168, 168, 160];
+    for (const side of [-WALK_HW, WALK_HW]) {
+      for (let t = 0; t <= 1; t += 1 / 48) {
+        const [px, py] = alongX ? uvToPixel(t, 0.5 + side) : uvToPixel(0.5 + side, t);
+        const gx = Math.floor(px);
+        const gy = Math.floor(py) + DY - lift;
+        r.set(gx, gy - 3, side < 0 ? rail : railDark);
+        const k = t * 6;
+        if (Math.abs(k - Math.round(k)) < 0.05) r.vline(gx, gy - 3, gy - 1, railDark);
+      }
+    }
+    return toSprite(r, 0, DY);
   });
 }
 
@@ -467,28 +499,31 @@ function paintRail(r: Raster, mask: number, bridge: boolean, dy = 0, withBallast
   }
 }
 
-export const RAIL_BRIDGE_LIFT = 4;
-
-export function railSprite(mask: number, bridge: boolean, season: SeasonTint = 0): Sprite {
-  return cache.get(`rl:${mask}:${bridge ? 1 : 0}:${season}`, () => {
+export function railSprite(mask: number, bridge: boolean, season: SeasonTint = 0, lift = 0): Sprite {
+  return cache.get(`rl:${mask}:${bridge ? 1 : 0}:${season}:${lift}`, () => {
     if (!bridge) {
       const r = new Raster(TILE_W, TILE_H);
       paintRail(r, mask, bridge, 0, true, season);
       return toSprite(r, 0, 0);
     }
-    // 鉄橋: 桁を少し持ち上げ、橋脚と側桁 (トラス) を描く
-    const DY = 12;
-    const lift = RAIL_BRIDGE_LIFT;
+    // 鉄橋: 桁を線路の高さ (lift) に置き、橋脚と側桁 (トラス) を描く
+    const DY = lift + 8;
     const r = new Raster(TILE_W, TILE_H + DY);
     const alongX = (mask & (DIR_E | DIR_W)) !== 0;
     const steel: RGB = [150, 64, 52];
     const steelDark: RGB = [104, 44, 36];
     const pier: RGB = [120, 120, 112];
+    const pierDark: RGB = [92, 92, 86];
     // 橋脚 (桁の下、水面まで)
-    for (const t of [0.22, 0.78]) {
-      for (const side of [-0.16, 0.16]) {
-        const [px, py] = alongX ? uvToPixel(t, 0.5 + side) : uvToPixel(0.5 + side, t);
-        r.vline(Math.floor(px), Math.floor(py) + DY - lift, Math.floor(py) + DY + 1, pier);
+    if (lift > 0) {
+      for (const t of [0.22, 0.78]) {
+        for (const side of [-0.14, 0.14]) {
+          const [px, py] = alongX ? uvToPixel(t, 0.5 + side) : uvToPixel(0.5 + side, t);
+          const gx = Math.floor(px);
+          const gy = Math.floor(py) + DY;
+          r.vline(gx, gy - lift, gy + 1, side < 0 ? pier : pierDark);
+          r.vline(gx + 1, gy - lift, gy + 1, pierDark);
+        }
       }
     }
     // 桁 (デッキ)
@@ -506,7 +541,7 @@ export function railSprite(mask: number, bridge: boolean, season: SeasonTint = 0
         r.set(gx, gy, steelDark);
         const k = Math.floor(t * 8);
         if (Math.abs(t * 8 - k) < 0.03) r.vline(gx, gy - 4, gy, side < 0 ? steelDark : steel);
-        else if (((t * 8) % 1 > 0.45 && (t * 8) % 1 < 0.55)) r.set(gx, gy - 2, steel);
+        else if ((t * 8) % 1 > 0.45 && (t * 8) % 1 < 0.55) r.set(gx, gy - 2, steel);
       }
     }
     return toSprite(r, 0, DY);

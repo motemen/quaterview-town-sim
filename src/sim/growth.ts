@@ -267,7 +267,9 @@ export function roadExtension(w: World, x: number, y: number, dir: number): { ti
 function growRoads(w: World): void {
   const { roads, buildings } = countKinds(w);
   let perDay = Math.min(1.5, 0.35 + buildings / 80);
-  if (roads > buildings * 0.9 + 14) perDay *= 0.3;
+  // 建物に対して道路が多すぎるときは伸ばさない (発展が止まれば道路も止まる)
+  if (roads > buildings * 0.8 + 12) return;
+  if (roads > buildings * 0.6 + 8) perDay *= 0.3;
   let attempts = Math.floor(perDay / 24);
   if (w.rng.chance(perDay / 24 - attempts)) attempts++;
   for (let a = 0; a < attempts; a++) extendRoadOnce(w);
@@ -336,11 +338,16 @@ function extendRoadOnce(w: World): void {
           weight *= canGoStraight ? 0.05 : 0.6;
         } else if (isStraightMid) {
           // 直線道路からの枝分かれ: 交差点や角から離れているところだけ
-          weight *= nearJunction(w, x, y, 3) ? 0.01 : 0.25;
+          weight *= nearJunction(w, x, y, 4) ? 0.005 : 0.15;
         } else {
           weight *= 0.05; // 交差点や角からさらに曲がる
         }
         if (ext.tiles.length > 1) weight *= 0.5; // 橋・踏切はやや珍しい
+        // 別の道路に突き当たって交差点を作る延伸は控えめに
+        if (popcount(roadConnections(w, last % w.w, Math.floor(last / w.w))) >= 1 && ext.tiles.length === 1) {
+          const m = roadConnections(w, last % w.w, Math.floor(last / w.w)) & ~[DIR_S, DIR_W, DIR_N, DIR_E][d];
+          if (m !== 0) weight *= 0.35;
+        }
         // 2〜3 マス隣に平行な道路があると街区が狭すぎるので抑える
         const lx = last % w.w;
         const ly = Math.floor(last / w.w);
@@ -465,6 +472,20 @@ function growBuildings(w: World): void {
       }
       if (roadDist === 0) {
         if (k === Kind.Lot && w.lotTimer[i] > 60 && w.rng.chance(0.1 / 24)) w.kind[i] = Kind.Grass;
+        // ぽつんと一軒家: 田畑や農道のそばの野原に、ごくまれに
+        if ((k === Kind.Grass || k === Kind.Farm) && w.value[i] < 24) {
+          let rural = false;
+          for (let d = 0; d < 4; d++) {
+            const nx = x + DX[d];
+            const ny = y + DY[d];
+            if (!inBounds(w, nx, ny)) continue;
+            const nk = w.kind[idx(w, nx, ny)];
+            if (nk === Kind.Farm || nk === Kind.FarmPath) rural = true;
+          }
+          if (rural && w.rng.chance(0.00012 / 24)) {
+            startConstruction(w, i, 0);
+          }
+        }
         continue;
       }
       const v = w.value[i];
@@ -502,6 +523,11 @@ function startConstruction(w: World, i: number, v: number): void {
   w.kind[i] = Kind.Building;
   w.bLevel[i] = level;
   w.bStyle[i] = w.rng.int(256);
+  if (level === 4) {
+    // 高層ビルの階数は地価で決める (地価が高い中心部ほど高い)
+    const extra = Math.max(0, Math.min(7, Math.floor((v - 88) / 9) + w.rng.int(2)));
+    w.bStyle[i] = (w.bStyle[i] & ~0x1c) | (extra << 2);
+  }
   w.bState[i] = BState.Constructing;
   w.bProgress[i] = 0;
   w.bAge[i] = 0;
@@ -588,7 +614,7 @@ export function buildingFloors(level: number, style: number): number {
   if (level === 1) return (style >> 7) & 1 ? 2 : 1;
   if (level === 2) return isMixedUse(level, style) ? 3 : ((style >> 4) & 3) === 2 ? 1 : 2;
   if (level === 3) return isMixedUse(level, style) ? 6 : 5;
-  if (level === 4) return 9 + (style & 3) * 2;
+  if (level === 4) return 12 + ((style >> 2) & 7) * 2; // 12〜26 階
   return LEVEL_FLOORS[level] ?? 1;
 }
 

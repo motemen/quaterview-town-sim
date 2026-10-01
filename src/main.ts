@@ -119,16 +119,35 @@ const hud = new Hud(
   (days) => jumpDays(days),
 );
 
-/** 時刻はそのままに、日数だけ一気に進める */
+/** 時刻はそのままに、日数だけ一気に進める。1 フレームに 1 日ずつ処理して画面を固めない。 */
+let jumpQueue = 0;
+let jumpTotal = 0;
 function jumpDays(days: number): void {
+  if (jumpQueue === 0) jumpTotal = 0;
+  jumpQueue = Math.min(jumpQueue + days, 3600);
+  jumpTotal += days;
+}
+
+function processJump(): void {
+  if (jumpQueue <= 0) return;
+  // 1 フレームで数日ぶん (重すぎない範囲で)
   const t0 = performance.now();
-  for (let d = 0; d < days; d++) advance(world, 60, 1);
-  trains.refresh(world);
-  world.stationsChanged = false;
+  while (jumpQueue > 0 && performance.now() - t0 < 24) {
+    advance(world, 60, 1);
+    jumpQueue--;
+  }
+  if (world.stationsChanged) {
+    world.stationsChanged = false;
+    trains.refresh(world);
+  }
   layer.invalidate();
-  save(world);
-  const cal = toCalendar(world.minutes);
-  hud.flash(`${days}日進めました → ${cal.year}年${cal.month}月${cal.day}日 (${Math.round(performance.now() - t0)}ms)`);
+  if (jumpQueue === 0) {
+    save(world);
+    const cal = toCalendar(world.minutes);
+    hud.flash(`${jumpTotal}日進めました → ${cal.year}年${cal.month}月${cal.day}日`);
+  } else {
+    hud.flash(`${jumpTotal - jumpQueue}/${jumpTotal}日…`);
+  }
 }
 
 function resize(): void {
@@ -153,6 +172,13 @@ resize();
         break;
       }
     }
+  } else if (at === "bridge") {
+    for (let i = 0; i < world.kind.length; i++) {
+      if (world.kind[i] === 3 && world.water[i]) {
+        cam.centerOnTile(i % world.w, Math.floor(i / world.w));
+        break;
+      }
+    }
   } else if (at && at.startsWith("k")) {
     // ?at=k9 で種類 9 (公園) のタイルへ
     const kind = Number(at.slice(1));
@@ -165,6 +191,17 @@ resize();
   } else if (at) {
     const [ax, ay] = at.split(",").map(Number);
     cam.centerOnTile(ax, ay);
+  }
+  // デバッグ用: ?jumps=N で 1 か月ジャンプを N 回、フレームごとに実行する
+  const jumps = Number(new URLSearchParams(location.search).get("jumps") ?? 0);
+  if (jumps > 0) {
+    let left = jumps;
+    const tick = () => {
+      if (left-- <= 0) return;
+      jumpDays(30);
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
   }
   if (new URLSearchParams(location.search).get("fw")) {
     const [ax, ay] = tileOrigin(st ? st.x : 32, st ? st.y : 32);
@@ -221,7 +258,8 @@ function frame(now: number): void {
   const dt = Math.min(0.25, (now - lastTime) / 1000);
   lastTime = now;
   elapsed += dt;
-  advance(world, dt, speed);
+  if (jumpQueue > 0) processJump();
+  else advance(world, dt, speed);
   applySeason();
   if (world.lastHour !== lastHour) {
     lastHour = world.lastHour;

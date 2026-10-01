@@ -13,7 +13,6 @@ import {
   crossingSprite,
   gateSprite,
   groundSprite,
-  RAIL_BRIDGE_LIFT,
   railSprite,
   roadEmissive,
   roadSprite,
@@ -77,13 +76,16 @@ export class TilePainter {
     const i = idx(w, x, y);
     const k = w.kind[i];
     const c = cornerHeights(w, x, y);
-    const hmin = Math.min(c[0], c[1], c[2], c[3]);
-    const rel = [c[0] - hmin, c[1] - hmin, c[2] - hmin, c[3] - hmin] as const;
+    const water = w.water[i] === 1;
+    // 水面はつねに高さ 0 の平面として描く (橋の頂点が高くても水は水平)
+    const hmin = water ? 0 : Math.min(c[0], c[1], c[2], c[3]);
+    const rel = water ? ([0, 0, 0, 0] as const) : ([c[0] - hmin, c[1] - hmin, c[2] - hmin, c[3] - hmin] as const);
     const [px0, py0] = this.tileScreen(x, y);
     const px = px0;
     const py = py0 - hmin * LEVEL_H;
     const variant = Math.floor(hash2(w.seed, x, y) * 8);
-    const water = w.water[i] === 1;
+    /** 橋の桁の高さ (px)。線路の頂点の高さに合わせる */
+    const bridgeLift = water ? Math.min(c[0], c[1], c[2], c[3]) * LEVEL_H : 0;
 
     // 地面
     let ground: GroundKind = "grass";
@@ -201,7 +203,7 @@ export class TilePainter {
         break;
       }
       case Kind.Rail:
-        this.blit(railSprite(railConnections(w, x, y), water, this.season), px, py, rel);
+        this.blit(railSprite(railConnections(w, x, y), water, this.season, bridgeLift), px, py, rel);
         break;
       case Kind.Crossing: {
         const rm = railConnections(w, x, y);
@@ -252,9 +254,7 @@ export class TilePainter {
     const c = cornerHeights(w, tx, ty);
     const u = pose.tx - tx + 0.5;
     const v = pose.ty - ty + 0.5;
-    let h = heightAt(c, u, v) * LEVEL_H;
-    // 鉄橋の上は桁のぶん高い
-    if (w.water[idx(w, tx, ty)] && w.kind[idx(w, tx, ty)] === Kind.Rail) h += RAIL_BRIDGE_LIFT;
+    const h = heightAt(c, u, v) * LEVEL_H;
     const [sx, sy] = this.tileScreen(tx, ty);
     const [lx, ly] = uvToPixel(u, v);
     return [Math.round(sx + lx), Math.round(sy + ly - h)];
@@ -327,7 +327,7 @@ export class MapLayer {
 
   constructor(readonly world: World) {
     this.originX = (world.h - 1) * HALF_W;
-    this.originY = 3 * LEVEL_H + 96;
+    this.originY = 3 * LEVEL_H + 200;
     const w = (world.w + world.h) * HALF_W;
     const h = (world.w + world.h) * HALF_H + this.originY + 40;
     this.canvas = document.createElement("canvas");
@@ -451,7 +451,7 @@ export class DynamicLayer {
     }
     const d0 = x - y;
     const s0 = x + y;
-    for (let s = s0 + 1; s <= s0 + 13; s++) {
+    for (let s = s0 + 1; s <= s0 + 24; s++) {
       for (let d = d0 - 2; d <= d0 + 2; d++) {
         if ((s + d) % 2 !== 0) continue;
         const tx = (s + d) / 2;

@@ -51,10 +51,13 @@ export class Hud {
       } else if (e.key === "1") this.setSpeed(1);
       else if (e.key === "2") this.setSpeed(4);
       else if (e.key === "3") this.setSpeed(16);
-      else if (e.key === "j") this.onJump(1);
-      else if (e.key === "J") this.onJump(10);
-      else if (e.key === "l" || e.key === "L") this.onJump(30);
+      else if (e.key === "j" && !e.repeat) this.onJump(1);
+      else if (e.key === "J" && !e.repeat) this.onJump(10);
+      else if ((e.key === "l" || e.key === "L") && !e.repeat) this.onJump(30);
+      else if (e.key === "?") this.toggleHelp();
+      else if (e.key === "Escape") this.toggleHelp(false);
     });
+    document.getElementById("help")!.addEventListener("click", () => this.toggleHelp(false));
   }
 
   currentSpeed = 1;
@@ -92,6 +95,11 @@ export class Hud {
     this.dateEl.textContent = `${c.year}年 ${c.month}月 ${c.day}日 (${SEASON_LABEL[seasonOf(c.month)]})`;
     this.clockEl.textContent = clock;
     this.popEl.textContent = `人口 ${world.population.toLocaleString("ja-JP")}人`;
+  }
+
+  toggleHelp(show?: boolean): void {
+    const el = document.getElementById("help")!;
+    el.hidden = show === undefined ? !el.hidden : !show;
   }
 
   /** 情報欄に一時的なメッセージを出す */

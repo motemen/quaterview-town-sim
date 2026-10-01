@@ -32,7 +32,7 @@ describe("terrain", () => {
   it("has water at height 0", () => {
     for (let y = 0; y < w.h; y++) {
       for (let x = 0; x < w.w; x++) {
-        if (w.water[idx(w, x, y)]) expect(cornerHeights(w, x, y)).toEqual([0, 0, 0, 0]);
+        if (w.water[idx(w, x, y)] && w.kind[idx(w, x, y)] === Kind.Water) expect(Math.max(...cornerHeights(w, x, y))).toBeLessThanOrEqual(1);
       }
     }
   });

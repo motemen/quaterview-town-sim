@@ -58,3 +58,19 @@ html, body {
   transition: opacity 0.4s;
 }
 #hud #hud-news.show { opacity: 1; }
+#help {
+  position: fixed;
+  left: 50%; top: 40%;
+  transform: translate(-50%, -50%);
+  background: rgba(26, 26, 46, 0.95);
+  color: var(--hud-fg);
+  border: 2px solid #4a4a7e;
+  padding: 12px 20px;
+  font-size: 16px;
+  line-height: 24px;
+}
+#help h2 { margin: 0 0 8px; font-size: 18px; color: var(--hud-accent); }
+#help table { border-collapse: collapse; }
+#help td { padding: 0 12px 0 0; white-space: nowrap; }
+#help td:first-child { color: var(--hud-accent); }
+#help p { margin: 8px 0 0; font-size: 14px; }

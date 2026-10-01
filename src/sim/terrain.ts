@@ -165,12 +165,13 @@ export function generateTerrain(w: World): void {
       }
     }
   }
+  // 線路の頂点は 1 に固定。鉄橋 (水面上) も同じ高さにして、坂を作らない
   for (const [x, y] of railTiles) {
     w.kind[idx(w, x, y)] = Kind.Rail;
-    if (w.water[idx(w, x, y)]) continue;
+    const bridge = w.water[idx(w, x, y)] === 1;
     for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
       const i = (y + dy) * S + (x + dx);
-      if (!fixed[i]) {
+      if (!fixed[i] || bridge) {
         w.height[i] = 1;
         fixed[i] = 1;
       }
