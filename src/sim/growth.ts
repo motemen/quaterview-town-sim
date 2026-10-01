@@ -2,6 +2,7 @@ import { fbm } from "./rng";
 import { maybeOpenStation } from "./rail";
 import { updateWeather } from "./weather";
 import { isLandmark, maybeStartLandmark, LANDMARK_LABEL } from "./landmarks";
+import { buildBranches, maybePlanBranch } from "./branch";
 import { seasonOf, toCalendar } from "./time";
 import {
   BState,
@@ -51,6 +52,8 @@ export function hourlyStep(w: World, hour: number, totalDays: number): void {
   if (hour === 0) {
     if (cal.month === 11 && cal.day === 1) w.snowSeen = false;
     if (totalDays % 10 === 0 && maybeOpenStation(w)) w.stationsChanged = true;
+    if (totalDays % 10 === 5) maybePlanBranch(w);
+    buildBranches(w);
     computeLandValue(w, totalDays);
     dailyAging(w);
     computePopulation(w);

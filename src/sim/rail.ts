@@ -24,6 +24,9 @@ export function railPath(w: World): [number, number][] {
       if (!inBounds(w, nx, ny)) continue;
       const i = idx(w, nx, ny);
       if (visited[i] || !isRailLike(w.kind[i])) continue;
+      // 接続マスクがあるときはそれに従う
+      const cur = w.railMask[idx(w, x, y)];
+      if (cur !== 0 && !(cur & R8_BIT[d])) continue;
       next = [nx, ny];
       nextHeading = d;
       break;

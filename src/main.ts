@@ -175,6 +175,12 @@ resize();
         break;
       }
     }
+  } else if (at === "branch") {
+    const b = world.branches[0];
+    if (b) {
+      const [bx, by] = b.tiles[Math.floor(b.tiles.length / 2)];
+      cam.centerOnTile(bx, by);
+    }
   } else if (at === "bridge") {
     for (let i = 0; i < world.kind.length; i++) {
       if (world.kind[i] === 3 && world.water[i]) {
@@ -289,6 +295,11 @@ function frame(now: number): void {
     world.stationsChanged = false;
     trains.refresh(world);
   }
+  if (world.terrainChanged) {
+    world.terrainChanged = false;
+    layer.invalidate();
+    minimap.refresh();
+  }
   trains.update(world, dt, speed);
   {
     const st = world.stations[0];
@@ -371,8 +382,8 @@ function updateSound(): void {
   const h = cal.hour + cal.minute / 60;
   // 画面内の列車
   let train = 0;
-  for (const t of trains.trains) {
-    for (const pose of trains.carPoses(t)) {
+  for (const [line, t] of trains.allTrains()) {
+    for (const pose of trains.carPoses(t, line)) {
       const [px, py] = tileOrigin(pose.tx, pose.ty);
       const sx = px - cam.x;
       const sy = py - cam.y;

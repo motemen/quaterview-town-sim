@@ -611,39 +611,49 @@ export function crossingSprite(railMask: number, roadMask: number, season: Seaso
   });
 }
 
-/** 駅: 線路 + ホーム + 屋根。スプライトは 32x26 (oy=10)。 */
-export function stationSprite(plazaDir: number, season: SeasonTint = 0): { base: Sprite; emissive: Sprite | null } {
-  return pairCache.get(`st:${plazaDir}:${season}`, () => {
+/** 駅: 線路 + ホーム + 屋根。スプライトは 32x26 (oy=10)。plazaDir が 1/3 (東/西) のときは南北の線路。 */
+export function stationSprite(plazaDir: number, season: SeasonTint = 0, railMask = 0): { base: Sprite; emissive: Sprite | null } {
+  return pairCache.get(`st:${plazaDir}:${season}:${railMask}`, () => {
     const DY = 10;
     const r = new Raster(TILE_W, TILE_H + DY);
     const e = new Raster(TILE_W, TILE_H + DY);
-    paintRail(r, R8_E | R8_W, false, DY, true, season);
-    const south = plazaDir === 2;
-    const inPlatform = (v: number) => (south ? v >= 0.66 : v <= 0.34);
+    const vertical = plazaDir === 1 || plazaDir === 3;
+    paintRail(r, railMask || (vertical ? R8_BIT[0] | R8_BIT[4] : R8_E | R8_W), false, DY, true, season);
+    // across: 広場側へ向かう座標 (0 = 線路の反対側, 1 = 広場側)、along: 線路に沿った座標
+    const toLocal = (u: number, v: number): [number, number] => {
+      if (plazaDir === 2) return [u, v];
+      if (plazaDir === 0) return [u, 1 - v];
+      if (plazaDir === 1) return [v, u];
+      return [v, 1 - u];
+    };
     forEachDiamondPixel((x, y, u, v) => {
-      if (inPlatform(v) && u > 0.02 && u < 0.98) {
-        const edge = south ? v < 0.7 : v > 0.3;
-        r.set(x, y + DY, edge ? PAL.concreteDark : PAL.platform);
+      const [along, across] = toLocal(u, v);
+      if (across >= 0.66 && along > 0.02 && along < 0.98) {
+        r.set(x, y + DY, across < 0.7 ? PAL.concreteDark : PAL.platform);
       }
     });
-    // 屋根 (9px 上)
     const ROOF = 9;
     forEachDiamondPixel((x, y, u, v) => {
-      const vv = south ? v : 1 - v;
-      if (vv >= 0.7 && vv <= 0.96 && u >= 0.1 && u <= 0.9) {
-        const edge = vv > 0.94 || vv < 0.72 || u < 0.12 || u > 0.88;
+      const [along, across] = toLocal(u, v);
+      if (across >= 0.7 && across <= 0.96 && along >= 0.1 && along <= 0.9) {
+        const edge = across > 0.94 || across < 0.72 || along < 0.12 || along > 0.88;
         r.set(x, y + DY - ROOF, edge ? shade(PAL.roofStation, 0.8) : PAL.roofStation);
       }
     });
-    // 柱
-    for (const u of [0.18, 0.5, 0.82]) {
-      const v = south ? 0.9 : 0.1;
+    // 柱と明かり: ローカル座標 → uv
+    const fromLocal = (along: number, across: number): [number, number] => {
+      if (plazaDir === 2) return [along, across];
+      if (plazaDir === 0) return [along, 1 - across];
+      if (plazaDir === 1) return [across, along];
+      return [1 - across, along];
+    };
+    for (const along of [0.18, 0.5, 0.82]) {
+      const [u, v] = fromLocal(along, 0.9);
       const [px, py] = uvToPixel(u, v);
       r.vline(Math.floor(px), Math.floor(py) + DY - ROOF + 1, Math.floor(py) + DY - 1, PAL.concreteDark);
     }
-    // 明かり
-    for (const u of [0.32, 0.68]) {
-      const v = south ? 0.82 : 0.18;
+    for (const along of [0.32, 0.68]) {
+      const [u, v] = fromLocal(along, 0.82);
       const [px, py] = uvToPixel(u, v);
       const lx = Math.floor(px);
       const ly = Math.floor(py) + DY - ROOF + 2;

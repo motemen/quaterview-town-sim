@@ -1,8 +1,7 @@
 import { Rng } from "./rng";
 import { World, createEmptyWorld, updateSlopes } from "./world";
-import { updateRailMask } from "./rail";
 
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 3;
 export const SAVE_KEY = "quaterview-town-sim/save";
 
 interface SaveData {
@@ -19,10 +18,11 @@ interface SaveData {
   snowSeen?: boolean;
   popMilestone?: number;
   flags?: number;
+  branches?: World["branches"];
   arrays: Record<string, string>;
 }
 
-const U8_FIELDS = ["height", "water", "kind", "value", "bLevel", "bStyle", "bState", "bProgress", "lotTimer", "lights"] as const;
+const U8_FIELDS = ["height", "water", "kind", "value", "bLevel", "bStyle", "bState", "bProgress", "lotTimer", "lights", "railMask"] as const;
 const U16_FIELDS = ["bAge"] as const;
 
 function toBase64(bytes: Uint8Array): string {
@@ -58,6 +58,7 @@ export function serialize(w: World): string {
     snowSeen: w.snowSeen,
     popMilestone: w.popMilestone,
     flags: w.flags,
+    branches: w.branches,
     arrays,
   };
   return JSON.stringify(data);
@@ -92,7 +93,7 @@ export function deserialize(json: string): World | null {
   w.snowSeen = data.snowSeen ?? false;
   w.popMilestone = data.popMilestone ?? 0;
   w.flags = data.flags ?? 0;
+  w.branches = data.branches ?? [];
   updateSlopes(w);
-  updateRailMask(w);
   return w;
 }

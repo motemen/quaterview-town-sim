@@ -217,7 +217,7 @@ export class TilePainter {
       }
       case Kind.Station: {
         const st = w.stations.find((s) => s.x === x && s.y === y);
-        const sp = stationSprite(st ? st.plazaDir : 2, this.season);
+        const sp = stationSprite(st ? st.plazaDir : 2, this.season, railConnections(w, x, y));
         this.blit(sp.base, px, py);
         if (sp.emissive) this.blitEmissive(sp.emissive, px, py);
         if (this.illumination) {
@@ -555,8 +555,8 @@ export class DynamicLayer {
     }
     // 列車: 奥の車両から
     const cars: { pose: CarPose; sum: number }[] = [];
-    for (const t of trains.trains) {
-      for (const pose of trains.carPoses(t)) cars.push({ pose, sum: pose.tx + pose.ty });
+    for (const [line, t] of trains.allTrains()) {
+      for (const pose of trains.carPoses(t, line)) cars.push({ pose, sum: pose.tx + pose.ty });
     }
     cars.sort((a, b) => a.sum - b.sum);
     for (const { pose } of cars) {

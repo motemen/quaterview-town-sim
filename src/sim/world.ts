@@ -105,6 +105,10 @@ export interface World {
   popMilestone: number;
   /** 通知済みの出来事フラグ (ビット) */
   flags: number;
+  /** 支線 (branch.ts) */
+  branches: import("./branch").Branch[];
+  /** 地形が変わったことを描画側に知らせるフラグ */
+  terrainChanged: boolean;
 }
 
 export function createEmptyWorld(seed: number, w = MAP_W, h = MAP_H): World {
@@ -137,6 +141,8 @@ export function createEmptyWorld(seed: number, w = MAP_W, h = MAP_H): World {
     snowSeen: false,
     popMilestone: 0,
     flags: 0,
+    branches: [],
+    terrainChanged: false,
   };
 }
 
