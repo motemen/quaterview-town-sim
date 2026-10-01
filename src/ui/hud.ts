@@ -14,6 +14,8 @@ const KIND_LABEL: Record<number, string> = {
   [Kind.Lot]: "空き地",
   [Kind.Park]: "公園",
   [Kind.Farm]: "田畑",
+  [Kind.FarmPath]: "農道",
+  [Kind.Shrine]: "神社",
 };
 
 const LEVEL_LABEL = ["", "住宅", "商店・アパート", "中層ビル", "高層ビル", "市役所", "タワー", "観覧車"];
@@ -97,7 +99,7 @@ export class Hud {
       else if (state === BState.Abandoned) s += " 空き家";
       else s += ` 築${world.bAge[i]}日 ${LEVEL_CAPACITY[world.bLevel[i]]}人`;
     }
-    if (k === Kind.Farm) s = `(${x},${y}) ${(world.bStyle[i] & 1) === 0 ? "田んぼ" : "畑"}`;
+    if (k === Kind.Farm) s = `(${x},${y}) ${["田んぼ", "畑", "花畑", "果樹園"][world.bStyle[i] & 3]}`;
     if (k === Kind.Road && world.water[i]) s = `(${x},${y}) 橋`;
     if (k === Kind.Rail && world.water[i]) s = `(${x},${y}) 鉄橋`;
     s += ` / 地価 ${world.value[i]}`;

@@ -17,6 +17,8 @@ import {
   roadEmissive,
   roadSprite,
   stationSprite,
+  orchardTreeSprite,
+  shrineSprite,
   treeLightsSprite,
   treeSprite,
 } from "./sprites";
@@ -88,8 +90,17 @@ export class TilePainter {
     else if (k === Kind.Lot) ground = w.lotTimer[i] < 20 ? "rubble" : "lot";
     else if (k === Kind.Park) ground = "park";
     else if (k === Kind.Building) ground = w.bLevel[i] >= 2 ? "concrete" : "grass";
-    else if (k === Kind.Farm) ground = (w.bStyle[i] & 1) === 0 ? "paddy" : "field";
-    this.blit(groundSprite(ground, rel, k === Kind.Farm ? w.bStyle[i] & 3 : variant, this.season), px, py);
+    else if (k === Kind.Farm) ground = (["paddy", "field", "flower", "orchard"] as const)[w.bStyle[i] & 3];
+    else if (k === Kind.FarmPath) ground = "farmpath";
+    else if (k === Kind.Shrine) ground = "grass";
+    let gv = variant;
+    if (k === Kind.Farm) gv = (w.bStyle[i] & 4) >> 1; // 畝の向き
+    if (k === Kind.FarmPath) {
+      // 隣の農道・道路の向きに合わせる
+      const ew = (inBounds(w, x - 1, y) && (w.kind[idx(w, x - 1, y)] === Kind.FarmPath || w.kind[idx(w, x - 1, y)] === Kind.Road)) || (inBounds(w, x + 1, y) && (w.kind[idx(w, x + 1, y)] === Kind.FarmPath || w.kind[idx(w, x + 1, y)] === Kind.Road));
+      gv = ew ? 1 : 0;
+    }
+    this.blit(groundSprite(ground, rel, gv, this.season), px, py);
 
     // マップの縁の断面
     if (x === w.w - 1 || y === w.h - 1) this.drawEdgeFace(x, y, px, py, rel);
@@ -108,6 +119,26 @@ export class TilePainter {
           const jv = v + (hash2(w.seed + 17 + n, x, y) - 0.5) * 0.2;
           this.drawTree(px, py, rel, ju, jv, variant * 3 + n);
         }
+        break;
+      }
+      case Kind.Farm:
+        if ((w.bStyle[i] & 3) === 3) {
+          for (const [u, v] of [
+            [0.3, 0.3],
+            [0.7, 0.3],
+            [0.3, 0.7],
+            [0.7, 0.7],
+          ]) {
+            const [lx, ly] = uvToPixel(u, v);
+            const h = heightAt(rel, u, v) * LEVEL_H;
+            this.blit(orchardTreeSprite(this.season), px + Math.round(lx), py + Math.round(ly - h));
+          }
+        }
+        break;
+      case Kind.Shrine: {
+        const sp = shrineSprite(this.season);
+        this.blit(sp.base, px, py);
+        if (sp.emissive) this.blitEmissive(sp.emissive, px, py);
         break;
       }
       case Kind.Park:

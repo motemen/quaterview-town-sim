@@ -102,7 +102,7 @@ export function computeLandValue(w: World, totalDays: number): void {
           if (k === Kind.Building && w.bState[j] === BState.Built) density += Math.min(4, w.bLevel[j]);
           else if (k === Kind.Building && w.bState[j] === BState.Abandoned) density -= 1;
           if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) {
-            if (k === Kind.Water || k === Kind.Park) amenity += 5;
+            if (k === Kind.Water || k === Kind.Park || k === Kind.Shrine) amenity += 5;
           }
         }
       }
@@ -523,7 +523,7 @@ export function isMixedUse(level: number, style: number): boolean {
 /** 建物の階数 (レベルとスタイルで決まる) */
 export function buildingFloors(level: number, style: number): number {
   if (level === 1) return (style >> 7) & 1 ? 2 : 1;
-  if (level === 2) return isMixedUse(level, style) ? 3 : 2;
+  if (level === 2) return isMixedUse(level, style) ? 3 : ((style >> 4) & 3) === 2 ? 1 : 2;
   if (level === 3) return isMixedUse(level, style) ? 6 : 5;
   if (level === 4) return 9 + (style & 3) * 2;
   return LEVEL_FLOORS[level] ?? 1;

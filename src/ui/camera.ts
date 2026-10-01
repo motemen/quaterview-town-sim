@@ -1,7 +1,7 @@
 import { HALF_H, HALF_W, LEVEL_H, screenToTile, tileOrigin } from "../render/iso";
 import { World, cornerHeights, inBounds } from "../sim/world";
 
-export const ZOOM_LEVELS = [1, 2, 3, 4] as const;
+export const ZOOM_LEVELS = [1, 1.5, 2, 2.5, 3, 4] as const;
 
 export class Camera {
   /** ビューポート左上のワールド座標 (ネイティブピクセル) */
@@ -111,8 +111,15 @@ export function attachInput(canvas: HTMLCanvasElement, cam: Camera, handlers: In
     { passive: false },
   );
   const keys = new Set<string>();
+  const zoomStep = (dir: number) => {
+    const i = ZOOM_LEVELS.indexOf(cam.zoom as (typeof ZOOM_LEVELS)[number]);
+    const next = Math.max(0, Math.min(ZOOM_LEVELS.length - 1, i + dir));
+    if (next !== i) cam.zoomAt(canvas.clientWidth / 2, canvas.clientHeight / 2, ZOOM_LEVELS[next]);
+  };
   window.addEventListener("keydown", (e) => {
     if (e.target instanceof HTMLInputElement) return;
+    if (e.key === "+" || e.key === "=" || e.key === ";") zoomStep(1);
+    else if (e.key === "-" || e.key === "_") zoomStep(-1);
     keys.add(e.key);
   });
   window.addEventListener("keyup", (e) => keys.delete(e.key));

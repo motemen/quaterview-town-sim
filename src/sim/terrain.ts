@@ -172,6 +172,37 @@ export function generateTerrain(w: World): void {
 
   // 8. 田畑: 平らな低地に長方形の区画を置く
   placeFarms(w);
+
+  // 9. 神社: 森の中の平地に
+  placeShrine(w);
+}
+
+function placeShrine(w: World): void {
+  const S = w.w + 1;
+  let best = -1;
+  let bestScore = -Infinity;
+  for (let y = 2; y < w.h - 2; y++) {
+    for (let x = 2; x < w.w - 2; x++) {
+      const i = idx(w, x, y);
+      if (w.kind[i] !== Kind.Forest || !isFlat(w, x, y)) continue;
+      // 参道 (南側) も平らな陸地であること
+      const pi = idx(w, x, y + 1);
+      if (w.water[pi] || !isFlat(w, x, y + 1) || (w.kind[pi] !== Kind.Forest && w.kind[pi] !== Kind.Grass)) continue;
+      let forest = 0;
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) if (inBounds(w, x + dx, y + dy) && w.kind[idx(w, x + dx, y + dy)] === Kind.Forest) forest++;
+      const h = w.height[y * S + x];
+      // 駅からほどよく離れた、森に囲まれた高台
+      const d = w.stations.length ? Math.hypot(w.stations[0].x - x, w.stations[0].y - y) : 20;
+      const score = forest + h * 4 - Math.abs(d - 12) * 0.8 + hash2(w.seed, x, y) * 3;
+      if (score > bestScore) {
+        bestScore = score;
+        best = i;
+      }
+    }
+  }
+  if (best < 0) return;
+  w.kind[best] = Kind.Shrine;
+  w.kind[best + w.w] = Kind.FarmPath; // 参道
 }
 
 function placeFarms(w: World): void {
@@ -183,8 +214,9 @@ function placeFarms(w: World): void {
     const ph = 3 + rng.int(4);
     const x0 = rng.int(w.w - pw);
     const y0 = rng.int(w.h - ph);
-    const style = rng.chance(0.6) ? 0 : 1; // 田 / 畑
-    const orient = rng.int(2) * 2;
+    const roll = rng.next();
+    const style = roll < 0.5 ? 0 : roll < 0.8 ? 1 : roll < 0.92 ? 2 : 3; // 田 / 畑 / 花畑 / 果樹園
+    const orient = rng.int(2) * 4;
     // 区画内の各タイルが平らな草地なら田畑にする (一部欠けてもよい)
     let placed = 0;
     for (let y = y0; y < y0 + ph; y++) {
@@ -199,7 +231,17 @@ function placeFarms(w: World): void {
         placed++;
       }
     }
-    void placed;
+    // 区画の縁に農道を通す
+    if (placed > 0 && rng.chance(0.7)) {
+      const south = rng.chance(0.5);
+      for (let k = -1; k <= (south ? pw : ph); k++) {
+        const x = south ? x0 + k : x0 + pw;
+        const y = south ? y0 + ph : y0 + k;
+        if (!inBounds(w, x, y)) continue;
+        const i = idx(w, x, y);
+        if ((w.kind[i] === Kind.Grass || w.kind[i] === Kind.Forest) && isFlat(w, x, y) && !w.water[i]) w.kind[i] = Kind.FarmPath;
+      }
+    }
   }
 }
 

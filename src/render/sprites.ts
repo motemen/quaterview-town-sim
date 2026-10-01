@@ -13,7 +13,7 @@ export function clearSpriteCache(): void {
   pairCache.clear();
 }
 
-export type GroundKind = "grass" | "lot" | "park" | "concrete" | "water" | "sand" | "rubble" | "paddy" | "field";
+export type GroundKind = "grass" | "lot" | "park" | "concrete" | "water" | "sand" | "rubble" | "paddy" | "field" | "flower" | "orchard" | "farmpath";
 
 /** ダイヤ内の全ピクセルを (x, y, u, v) で巡る */
 function forEachDiamondPixel(fn: (x: number, y: number, u: number, v: number) => void): void {
@@ -49,10 +49,19 @@ const GROUND_COLORS: Record<GroundKind, [RGB, RGB, RGB]> = {
   rubble: [PAL.dirtDark, shade(PAL.dirtDark, 0.8), PAL.concreteDark],
   paddy: [[96, 156, 80], [72, 128, 64], [120, 176, 96]],
   field: [[164, 128, 88], [136, 104, 68], [92, 152, 72]],
+  flower: [[164, 128, 88], [136, 104, 68], [240, 160, 180]],
+  orchard: [[120, 168, 92], [96, 140, 76], [140, 184, 108]],
+  farmpath: [[196, 176, 136], [168, 148, 108], [212, 196, 160]],
 };
 
 /** 田畑の [地, 畝の影, 作物] の色 */
-function farmColors(kind: "paddy" | "field", season: SeasonTint): [RGB, RGB, RGB] {
+function farmColors(kind: "paddy" | "field" | "flower", season: SeasonTint): [RGB, RGB, RGB] {
+  if (kind === "flower") {
+    if (season === 3) return [[212, 208, 200], [180, 172, 160], [236, 234, 230]];
+    if (season === 2) return [[164, 128, 88], [136, 104, 68], [232, 200, 72]]; // コスモス・菊
+    if (season === 1) return [[156, 120, 80], [128, 96, 60], [255, 212, 64]]; // ひまわり
+    return [[164, 128, 88], [136, 104, 68], [240, 150, 180]]; // 春の花
+  }
   if (kind === "paddy") {
     if (season === 0) return [[126, 164, 172], [104, 140, 152], [112, 176, 96]]; // 水を張った田
     if (season === 1) return [[84, 156, 72], [64, 128, 56], [112, 184, 88]];
@@ -73,7 +82,12 @@ export type SeasonTint = 0 | 1 | 2 | 3; // 0=春/夏 1=夏 2=秋 3=冬
 
 function seasonalGround(kind: GroundKind, season: SeasonTint): [RGB, RGB, RGB] {
   const base = GROUND_COLORS[kind];
-  if (kind === "water" || kind === "concrete" || kind === "rubble") return base;
+  if (kind === "water" || kind === "concrete" || kind === "rubble" || kind === "farmpath") return base;
+  if (kind === "orchard") {
+    if (season === 3) return [[226, 232, 238], [204, 212, 222], [242, 246, 250]];
+    if (season === 2) return [mix(base[0], [170, 150, 70], 0.3), mix(base[1], [140, 120, 60], 0.3), mix(base[2], [200, 180, 90], 0.3)];
+    return base;
+  }
   if (season === 3) {
     // 雪
     if (kind === "lot") return [[220, 216, 212], [196, 190, 184], [236, 234, 230]];
@@ -101,7 +115,7 @@ export function groundSprite(kind: GroundKind, rel: readonly [number, number, nu
     const dzdy = (rB + rL - rT - rR) / 2;
     const bright = kind === "water" ? 1 : 1 + 0.22 * dzdx + 0.12 * dzdy;
     const [base, dark, light] = seasonalGround(kind, season).map((c) => shade(c, bright)) as [RGB, RGB, RGB];
-    const farm = kind === "paddy" || kind === "field" ? farmColors(kind, season) : null;
+    const farm = kind === "paddy" || kind === "field" || kind === "flower" ? farmColors(kind, season) : null;
     const farmAlongX = (variant & 2) !== 0;
     for (let x = 0; x < TILE_W; x++) {
       const xc = x + 0.5;
@@ -136,11 +150,28 @@ export function groundSprite(kind: GroundKind, rel: readonly [number, number, nu
           const [u, v] = pixelToUV(x + 0.5, y - 8 + 0.5);
           const along = farmAlongX ? v : u;
           const phase = (along * 7) % 1;
-          if (u < 0.08 || v < 0.08 || u > 0.97 || v > 0.97) c = shade(PAL.dirtDark, 0.95);
-          else if (phase < 0.45) c = farm[2];
+          if (u < 0.08 || v < 0.08 || u > 0.97 || v > 0.97) c = season === 3 ? [190, 186, 176] : ([128, 108, 76] as RGB);
+          else if (kind === "flower") {
+            // 花は点々と
+            if (phase < 0.5 && n < 0.55) c = n < 0.2 ? shade(farm[2], 1.15) : farm[2];
+            else if (phase < 0.5) c = [96, 150, 72];
+            else c = phase < 0.65 ? farm[1] : farm[0];
+            if (season === 3) c = n < 0.5 ? farm[2] : farm[0];
+          } else if (phase < 0.45) c = farm[2];
           else if (phase < 0.6) c = farm[1];
           else c = farm[0];
           if (season === 3 && kind === "field" && n < 0.5) c = farm[2];
+        } else if (kind === "farmpath") {
+          // 轍 (わだち) のある土の道
+          const [u, v] = pixelToUV(x + 0.5, y - 8 + 0.5);
+          const rutX = Math.abs(v - 0.38) < 0.05 || Math.abs(v - 0.62) < 0.05;
+          const rutY = Math.abs(u - 0.38) < 0.05 || Math.abs(u - 0.62) < 0.05;
+          const alongX = (variant & 1) !== 0;
+          if ((alongX ? rutX : rutY) && n > 0.25) c = dark;
+          else if (n < 0.08) c = light;
+          if (season === 3 && n < 0.6 && !(alongX ? rutX : rutY)) c = [226, 232, 238];
+        } else if (kind === "orchard") {
+          if (n < 0.06) c = dark;
         } else {
           if (n < 0.09) c = dark;
           else if (n < 0.15) c = light;
@@ -204,6 +235,103 @@ export function treeLightsSprite(variant: number): Sprite {
       r.set(x, y, colors[k % colors.length]);
     }
     return toSprite(r, 4, 11);
+  });
+}
+
+/** 果樹 (小さい丸い木)。基部中央が原点 (ox=3, oy=7)。 */
+export function orchardTreeSprite(season: SeasonTint): Sprite {
+  return cache.get(`ot:${season}`, () => {
+    const r = new Raster(7, 8);
+    const canopy: RGB = season === 3 ? [236, 240, 246] : season === 2 ? [184, 120, 56] : season === 0 ? [228, 176, 196] : [64, 136, 64];
+    r.vline(3, 5, 7, PAL.trunk);
+    r.disc(3.5, 3.5, 2.6, canopy);
+    r.set(3, 2, shade(canopy, 1.15));
+    if (season === 1) {
+      r.set(2, 4, [232, 96, 72]);
+      r.set(5, 3, [232, 96, 72]);
+    }
+    return toSprite(r, 3, 7);
+  });
+}
+
+/** 神社: 鳥居と社殿。32x44 (oy=28)。 */
+export function shrineSprite(season: SeasonTint): { base: Sprite; emissive: Sprite | null } {
+  return pairCache.get(`shrine:${season}`, () => {
+    const DY = 28;
+    const r = new Raster(TILE_W, TILE_H + DY);
+    const e = new Raster(TILE_W, TILE_H + DY);
+    const gravel: RGB = season === 3 ? [226, 232, 238] : [208, 204, 192];
+    forEachDiamondPixel((x, y, u, v) => {
+      const n = hash2(31, x, y);
+      const path = Math.abs(u - 0.5) < 0.12;
+      let c: RGB = path ? gravel : grassPixel(x, y, season);
+      if (path && n < 0.1) c = shade(gravel, 0.9);
+      r.set(x, y + DY, c);
+    });
+    const red: RGB = [200, 56, 48];
+    const redDark: RGB = [150, 40, 36];
+    // 鳥居 (手前、参道の入口)
+    {
+      const [px, py] = uvToPixel(0.5, 0.9);
+      const gx = Math.floor(px);
+      const gy = Math.floor(py) + DY;
+      r.vline(gx - 4, gy - 12, gy, red);
+      r.vline(gx + 3, gy - 12, gy, redDark);
+      r.hline(gx - 6, gx + 5, gy - 12, red);
+      r.hline(gx - 6, gx + 5, gy - 13, redDark);
+      r.hline(gx - 5, gx + 4, gy - 9, red);
+    }
+    // 社殿 (奥): 木の壁と緑の屋根
+    {
+      const wall: RGB = [164, 120, 84];
+      const wallR = shade(wall, 0.72);
+      const roof: RGB = [72, 112, 96];
+      const fw = 16;
+      const x0 = HALF_W - fw / 2;
+      const x1 = HALF_W + fw / 2;
+      const baseTop = DY - 8; // 奥寄りに置く
+      const wallH = 7;
+      for (let x = x0; x < x1; x++) {
+        const [ytR, ybR] = diamondRows(x, fw);
+        const yt = ytR + baseTop;
+        const yb = ybR + baseTop;
+        const left = x < HALF_W;
+        for (let y = yb - wallH + 1; y <= yb; y++) r.set(x, y, left ? wall : wallR);
+        // 入口と灯籠の明かり
+        if (left && (x === HALF_W - 3 || x === HALF_W - 2)) {
+          for (let y = yb - 4; y <= yb; y++) r.set(x, y, shade(wall, 0.45));
+          e.set(x, yb - 4, PAL.windowLitWarm);
+        }
+        // 反りのある屋根
+        let last = -1;
+        for (let y = yt - wallH - 1; y <= yb - wallH; y++) {
+          const A = (x + 0.5 - HALF_W) / (fw / 2);
+          const B = (y + 0.5 - baseTop - HALF_H + wallH) / (fw / 4) + 1;
+          const v = (B - A) / 2;
+          const eh = Math.round(5 * (1 - Math.abs(2 * v - 1)));
+          const target = y - eh;
+          const color = v < 0.5 ? shade(roof, 1.15) : shade(roof, 0.8);
+          if (last >= 0) for (let yy = Math.min(last + 1, target); yy <= Math.max(last - 1, target); yy++) r.set(x, yy, color);
+          r.set(x, target, color);
+          last = target;
+        }
+        r.set(x, yb - wallH + 1, shade(roof, 0.6));
+      }
+      // 千木
+      r.vline(HALF_W - 1, baseTop - wallH - 7, baseTop - wallH - 4, [220, 200, 160]);
+      r.vline(HALF_W + 1, baseTop - wallH - 7, baseTop - wallH - 4, [220, 200, 160]);
+    }
+    // 灯籠
+    for (const u of [0.32, 0.68]) {
+      const [px, py] = uvToPixel(u, 0.7);
+      const lx = Math.floor(px);
+      const ly = Math.floor(py) + DY;
+      r.vline(lx, ly - 5, ly, PAL.concreteDark);
+      r.fillRect(lx - 1, ly - 7, 3, 2, PAL.concrete);
+      r.set(lx, ly - 6, [255, 220, 140]);
+      e.set(lx, ly - 6, PAL.windowLitWarm);
+    }
+    return { base: toSprite(r, 0, DY), emissive: toSprite(e, 0, DY) };
   });
 }
 
@@ -695,8 +823,15 @@ function boxBuildingSprite(spec: BuildingSpec): { base: Sprite; emissive: Sprite
   let anyLight = false;
 
   const st = spec.style;
+  // レベル 2 の種類: 0=アパート 1=レストラン 2=コンビニ 3=商店
+  const shop = level === 2 ? (st >> 4) & 3 : 0;
   let wall: RGB = level === 4 ? TOWER_WALLS[st % TOWER_WALLS.length] : WALLS[st % WALLS.length];
+  if (shop === 2) wall = [240, 240, 236];
+  if (shop === 1) wall = [236, 224, 200];
   let roof: RGB = level <= 2 ? ROOFS[(st >> 3) % ROOFS.length] : shade(wall, 0.9);
+  if (shop === 2) roof = [120, 124, 128];
+  const BANDS: RGB[] = [[40, 120, 200], [40, 160, 96], [232, 120, 40], [200, 48, 72]];
+  const band: RGB = BANDS[(st >> 6) & 3];
   if (abandoned) {
     wall = mix(wall, [110, 110, 104], 0.55);
     roof = mix(roof, [90, 90, 90], 0.55);
@@ -739,10 +874,40 @@ function boxBuildingSprite(spec: BuildingSpec): { base: Sprite; emissive: Sprite
         anyLight = true;
       }
     }
-    if (level === 2 && !left && floors === total && along >= 1 && along < fw / 2 - 3) {
+    if (level === 2 && !left && floors === total && along >= 1 && along < fw / 2 - 3 && shop !== 2) {
       const top = yb - wallH + 1;
       r.set(x, top + 1, sign);
       r.set(x, top + 2, shade(sign, 0.8));
+    }
+    if (level === 2 && floors > 0 && along < fw / 2 - 1) {
+      const gTop = yb - fh + 1; // 1 階の上端
+      if (shop === 1) {
+        // レストラン: 赤白のひさしと大きな窓
+        if (left && along >= 1) {
+          const stripe = along % 2 === 0;
+          r.set(x, gTop + 1, stripe ? [220, 60, 50] : [250, 250, 240]);
+          r.set(x, gTop + 2, stripe ? [180, 48, 40] : [220, 220, 210]);
+          if (along >= 5 && along !== fw / 2 - 2) {
+            for (let wy = 3; wy <= 5; wy++) if (putWindow(r, e, x, gTop + wy, shade(PAL.windowDay, 1.1), !abandoned && !constructing ? PAL.windowLitWarm : null)) anyLight = true;
+          }
+        }
+      } else if (shop === 2) {
+        // コンビニ: 色の帯と、ガラス張りの明るい 1 階
+        const bc = abandoned ? shade(band, 0.5) : band;
+        r.set(x, gTop + 1, bc);
+        r.set(x, gTop + 2, shade(bc, 0.85));
+        if (along >= 1 && along < fw / 2 - 2 && !(left && along >= fw / 2 - 5 && along <= fw / 2 - 4)) {
+          for (let wy = 3; wy <= 5; wy++) if (putWindow(r, e, x, gTop + wy, [120, 150, 180], !abandoned && !constructing ? [255, 255, 236] : null)) anyLight = true;
+        }
+      } else if (shop === 3 && left && along >= 1) {
+        // 商店: 単色のひさしとショーウィンドウ
+        const ac = abandoned ? shade(band, 0.5) : band;
+        r.set(x, gTop + 1, shade(ac, 1.1));
+        r.set(x, gTop + 2, ac);
+        if (along >= 1 && along < fw / 2 - 5) {
+          for (let wy = 3; wy <= 5; wy++) if (putWindow(r, e, x, gTop + wy, shade(PAL.windowDay, 1.15), !abandoned && !constructing && hash2(spec.lights, along >> 2, 9) < 0.8 ? PAL.windowLit : null)) anyLight = true;
+        }
+      }
     }
     for (let y = yt - wallH; y <= yb - wallH; y++) {
       const edge = y === yt - wallH || y === yb - wallH;
