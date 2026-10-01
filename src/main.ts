@@ -6,6 +6,9 @@ import { advance, newWorld } from "./sim/sim";
 import { Season, nightFactor, seasonOf, skyColor, tintColor, toCalendar } from "./sim/time";
 import { Weather } from "./sim/weather";
 import { drawPrecipitation } from "./render/effects";
+import { Fireworks } from "./render/fireworks";
+import { SoundSystem } from "./ui/sound";
+import { tileOrigin } from "./render/iso";
 import { World } from "./sim/world";
 import { Camera, attachInput } from "./ui/camera";
 import { Hud } from "./ui/hud";
@@ -83,6 +86,22 @@ let world = loadWorld();
 let layer = new MapLayer(world);
 let trains = new TrainSystem(world);
 const dyn = new DynamicLayer();
+const fireworks = new Fireworks();
+const sound = new SoundSystem();
+let fireworkBursts = 0;
+{
+  const btn = document.getElementById("btn-sound") as HTMLButtonElement;
+  const label = () => {
+    btn.textContent = sound.enabled ? "♪ ON" : "♪ OFF";
+    btn.classList.toggle("active", sound.enabled);
+  };
+  btn.addEventListener("click", () => {
+    sound.toggle();
+    label();
+  });
+  window.addEventListener("pointerdown", () => sound.unlock(), { once: true });
+  label();
+}
 const cam = new Camera(canvas);
 let speed = 1;
 
@@ -121,9 +140,24 @@ resize();
         break;
       }
     }
+  } else if (at && at.startsWith("k")) {
+    // ?at=k9 で種類 9 (公園) のタイルへ
+    const kind = Number(at.slice(1));
+    for (let i = 0; i < world.kind.length; i++) {
+      if (world.kind[i] === kind) {
+        cam.centerOnTile(i % world.w, Math.floor(i / world.w));
+        break;
+      }
+    }
   } else if (at) {
     const [ax, ay] = at.split(",").map(Number);
     cam.centerOnTile(ax, ay);
+  }
+  if (new URLSearchParams(location.search).get("fw")) {
+    const [ax, ay] = tileOrigin(st ? st.x : 32, st ? st.y : 32);
+    fireworks.burstNow(ax + 16, ay - 100);
+    fireworks.burstNow(ax - 80, ay - 140);
+    fireworks.update(0.5, false, 0, 0);
   }
 }
 
@@ -148,12 +182,26 @@ let currentSeason: Season | null = null;
 const SEASON_INDEX: Record<Season, 0 | 1 | 2 | 3> = { spring: 0, summer: 1, autumn: 2, winter: 3 };
 let elapsed = 0;
 
+let currentIllumination = false;
+
 function applySeason(): void {
-  const season = seasonOf(toCalendar(world.minutes).month);
-  if (season === currentSeason) return;
+  const cal = toCalendar(world.minutes);
+  const season = seasonOf(cal.month);
+  const illumination = cal.month === 12;
+  if (season === currentSeason && illumination === currentIllumination) return;
   currentSeason = season;
+  currentIllumination = illumination;
   layer.painter.season = SEASON_INDEX[season];
+  layer.painter.illumination = illumination;
   layer.invalidate();
+}
+
+/** 花火の季節 (7月20日〜8月末の夜) か */
+function fireworksActive(): boolean {
+  const cal = toCalendar(world.minutes);
+  const h = cal.hour + cal.minute / 60;
+  const summerNight = (cal.month === 8 || (cal.month === 7 && cal.day >= 20)) && h >= 19.5 && h <= 21.5;
+  return summerNight && world.weather === Weather.Clear;
 }
 
 function frame(now: number): void {
@@ -171,6 +219,14 @@ function frame(now: number): void {
     trains.refresh(world);
   }
   trains.update(world, dt, speed);
+  {
+    const st = world.stations[0];
+    const [ax, ay] = st ? tileOrigin(st.x, st.y) : [0, 0];
+    const wasActive = fireworks.active;
+    fireworks.update(speed > 0 ? dt : 0, fireworksActive() && speed > 0, ax + 16, ay + 8);
+    if (!wasActive && fireworks.active) fireworkBursts++;
+  }
+  updateSound();
   cam.clampTo(world);
   draw();
   hud.update(world);
@@ -206,7 +262,7 @@ function draw(): void {
   ctx.drawImage(layer.canvas, -layer.originX, -layer.originY);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   // 列車など動くもの
-  dyn.render(world, trains, cam.viewW, cam.viewH, cam.x, cam.y, SEASON_INDEX[season]);
+  dyn.render(world, trains, cam.viewW, cam.viewH, cam.x, cam.y, SEASON_INDEX[season], currentIllumination);
   ctx.setTransform(z, 0, 0, z, 0, 0);
   ctx.drawImage(dyn.canvas, 0, 0);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -228,7 +284,48 @@ function draw(): void {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1;
   }
+  if (fireworks.active) {
+    ctx.setTransform(z, 0, 0, z, ox, oy);
+    fireworks.draw(ctx);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+  }
   if (wet) drawPrecipitation(ctx, W, H, world.weather === Weather.Snow ? "snow" : "rain", elapsed, z);
+  else if (cal.month === 4 && cal.day <= 20) drawPrecipitation(ctx, W, H, "petals", elapsed, z);
+}
+
+function updateSound(): void {
+  if (!sound.enabled) return;
+  const cal = toCalendar(world.minutes);
+  const season = seasonOf(cal.month);
+  const h = cal.hour + cal.minute / 60;
+  // 画面内の列車
+  let train = 0;
+  for (const t of trains.trains) {
+    for (const pose of trains.carPoses(t)) {
+      const [px, py] = tileOrigin(pose.tx, pose.ty);
+      const sx = px - cam.x;
+      const sy = py - cam.y;
+      if (sx > -200 && sx < cam.viewW + 200 && sy > -200 && sy < cam.viewH + 200) {
+        train = Math.max(train, t.stopTimer > 0 ? 0.15 : 1);
+      }
+    }
+  }
+  let crossing = false;
+  for (const i of trains.activeCrossings) {
+    const [px, py] = tileOrigin(i % world.w, Math.floor(i / world.w));
+    const sx = px - cam.x;
+    const sy = py - cam.y;
+    if (sx > -100 && sx < cam.viewW + 100 && sy > -100 && sy < cam.viewH + 100) crossing = true;
+  }
+  sound.update({
+    train: train * (speed > 4 ? 0.6 : 1),
+    crossing,
+    rain: world.weather === Weather.Rain,
+    birds: (season === "spring" || season === "summer") && h >= 5 && h <= 17 && world.weather === Weather.Clear && speed <= 1,
+    insects: season === "summer" && (h >= 19 || h <= 4) && world.weather === Weather.Clear,
+    fireworkBursts,
+    paused: speed === 0,
+  });
 }
 
 window.addEventListener("pagehide", () => save(world));

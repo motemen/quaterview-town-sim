@@ -184,6 +184,29 @@ export function treeSprite(variant: number, tint = 0): Sprite {
   });
 }
 
+/** 木に巻いたイルミネーション (発光のみ)。treeSprite と同じ基準点。 */
+export function treeLightsSprite(variant: number): Sprite {
+  return cache.get(`tl:${variant}`, () => {
+    const r = new Raster(9, 12);
+    const colors: RGB[] = [
+      [255, 220, 120],
+      [120, 220, 255],
+      [255, 140, 200],
+      [160, 255, 160],
+    ];
+    const big = variant % 3 === 0;
+    const cy = big ? 5 : 6;
+    for (let k = 0; k < 7; k++) {
+      const a = hash2(variant, k, 1) * 6.28;
+      const rad = (big ? 3 : 2.4) * (0.5 + hash2(variant, k, 2) * 0.5);
+      const x = Math.round(4 + Math.cos(a) * rad);
+      const y = Math.round(cy + Math.sin(a) * rad);
+      r.set(x, y, colors[k % colors.length]);
+    }
+    return toSprite(r, 4, 11);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // 道路・線路
 
