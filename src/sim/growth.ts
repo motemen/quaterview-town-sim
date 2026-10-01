@@ -59,7 +59,7 @@ export function hourlyStep(w: World, hour: number, totalDays: number): void {
   if (hour === 6) seasonalNews(w, cal.month, cal.day);
   if (hour === 18) rerollLights(w);
   growRoads(w);
-  growBuildings(w);
+  growBuildings(w, hour);
 }
 
 export function computeLandValue(w: World, totalDays: number): void {
@@ -67,56 +67,97 @@ export function computeLandValue(w: World, totalDays: number): void {
   const W = w.w;
   const H = w.h;
   const S = W + 1;
+  const n = W * H;
+
+  // 1. 駅の影響: 駅ごとに半径内のタイルだけ更新する
+  const station = new Float32Array(n);
+  for (const st of w.stations) {
+    const R = STATION_RADIUS;
+    for (let y = Math.max(0, st.y - R); y <= Math.min(H - 1, st.y + R); y++) {
+      for (let x = Math.max(0, st.x - R); x <= Math.min(W - 1, st.x + R); x++) {
+        const d = Math.hypot(x - st.x, y - st.y);
+        const v = Math.max(0, 1 - d / R);
+        const i = y * W + x;
+        if (v > station[i]) station[i] = v;
+      }
+    }
+  }
+
+  // 2. 密度と快適さは累積和で O(1) に
+  const dens = new Int16Array(n);
+  const amen = new Uint8Array(n);
+  const roadNear = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const k = w.kind[i];
+    if (k === Kind.Building) {
+      if (w.bState[i] === BState.Built) dens[i] = Math.min(4, w.bLevel[i]);
+      else if (w.bState[i] === BState.Abandoned) dens[i] = -1;
+    } else if (k === Kind.Water || k === Kind.Park || k === Kind.Shrine) amen[i] = 1;
+    if (isRoadLike(k)) roadNear[i] = 1;
+  }
+  const densSum = prefixSum(dens, W, H);
+  const amenSum = prefixSum(amen, W, H);
+
+  // 3. 流行のノイズは 4 マスごとに計算して補間
+  const G = 4;
+  const gw = Math.floor(W / G) + 2;
+  const gh = Math.floor(H / G) + 2;
+  const drift = new Float32Array(gw * gh);
+  for (let gy = 0; gy < gh; gy++) {
+    for (let gx = 0; gx < gw; gx++) {
+      drift[gy * gw + gx] = (fbm(w.seed + 500, (gx * G) / 12 + years * 0.35, (gy * G) / 12 - years * 0.2, 2) - 0.5) * 44;
+    }
+  }
+
   for (let y = 0; y < H; y++) {
+    const gy = Math.floor(y / G);
+    const fy = (y - gy * G) / G;
     for (let x = 0; x < W; x++) {
-      const i = idx(w, x, y);
+      const i = y * W + x;
       if (w.water[i]) {
         w.value[i] = 0;
         continue;
       }
-      let v = 0;
-      // 駅の影響
-      let best = 0;
-      for (const s of w.stations) {
-        const d = Math.hypot(x - s.x, y - s.y);
-        best = Math.max(best, Math.max(0, 1 - d / STATION_RADIUS));
-      }
-      v += 52 * Math.pow(best, 1.4);
-      // 道路アクセス
-      let roadAdj = false;
-      for (let d = 0; d < 4; d++) {
-        const nx = x + DX[d];
-        const ny = y + DY[d];
-        if (inBounds(w, nx, ny) && isRoadLike(w.kind[idx(w, nx, ny)])) roadAdj = true;
-      }
-      if (roadAdj) v += 10;
-      // 周囲の密度 (5x5)
-      let density = 0;
-      let amenity = 0;
-      for (let dy = -2; dy <= 2; dy++) {
-        for (let dx = -2; dx <= 2; dx++) {
-          if (dx === 0 && dy === 0) continue;
-          const nx = x + dx;
-          const ny = y + dy;
-          if (!inBounds(w, nx, ny)) continue;
-          const j = idx(w, nx, ny);
-          const k = w.kind[j];
-          if (k === Kind.Building && w.bState[j] === BState.Built) density += Math.min(4, w.bLevel[j]);
-          else if (k === Kind.Building && w.bState[j] === BState.Abandoned) density -= 1;
-          if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) {
-            if (k === Kind.Water || k === Kind.Park || k === Kind.Shrine) amenity += 5;
-          }
-        }
-      }
+      let v = 72 * Math.pow(station[i], 1.4);
+      // 道路アクセス (4 近傍)
+      if ((x > 0 && roadNear[i - 1]) || (x < W - 1 && roadNear[i + 1]) || (y > 0 && roadNear[i - W]) || (y < H - 1 && roadNear[i + W])) v += 10;
+      const density = rectSum(densSum, W, H, x - 2, y - 2, x + 2, y + 2) - dens[i];
+      const amenity = rectSum(amenSum, W, H, x - 1, y - 1, x + 1, y + 1) * 5;
       v += Math.min(48, density * 1.1);
       v += Math.min(12, amenity);
-      // 眺望 (高台)
       v += w.height[y * S + x] * 2;
-      // 流行の移り変わり: ゆっくり動くノイズ
-      v += (fbm(w.seed + 500, x / 12 + years * 0.35, y / 12 - years * 0.2, 2) - 0.5) * 44;
+      const gx = Math.floor(x / G);
+      const fx = (x - gx * G) / G;
+      const d00 = drift[gy * gw + gx];
+      const d10 = drift[gy * gw + gx + 1];
+      const d01 = drift[(gy + 1) * gw + gx];
+      const d11 = drift[(gy + 1) * gw + gx + 1];
+      v += (d00 * (1 - fx) + d10 * fx) * (1 - fy) + (d01 * (1 - fx) + d11 * fx) * fy;
       w.value[i] = Math.max(0, Math.min(255, Math.round(v)));
     }
   }
+}
+
+/** (W+1)x(H+1) の二次元累積和 */
+function prefixSum(src: ArrayLike<number>, W: number, H: number): Int32Array {
+  const P = new Int32Array((W + 1) * (H + 1));
+  for (let y = 1; y <= H; y++) {
+    let row = 0;
+    for (let x = 1; x <= W; x++) {
+      row += src[(y - 1) * W + (x - 1)];
+      P[y * (W + 1) + x] = P[(y - 1) * (W + 1) + x] + row;
+    }
+  }
+  return P;
+}
+
+function rectSum(P: Int32Array, W: number, H: number, x0: number, y0: number, x1: number, y1: number): number {
+  x0 = Math.max(0, x0);
+  y0 = Math.max(0, y0);
+  x1 = Math.min(W - 1, x1);
+  y1 = Math.min(H - 1, y1);
+  const S = W + 1;
+  return P[(y1 + 1) * S + x1 + 1] - P[y0 * S + x1 + 1] - P[(y1 + 1) * S + x0] + P[y0 * S + x0];
 }
 
 function dailyAging(w: World): void {
@@ -409,9 +450,14 @@ function popcount(m: number): number {
   return c;
 }
 
-function growBuildings(w: World): void {
+/** 建物以外のタイルは 4 時間に 1 回だけ調べる (確率は 4 倍にして釣り合わせる) */
+const PHASES = 4;
+
+function growBuildings(w: World, hour: number): void {
   const W = w.w;
   const H = w.h;
+  const phase = hour % PHASES;
+  const P = PHASES;
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const i = idx(w, x, y);
@@ -420,6 +466,7 @@ function growBuildings(w: World): void {
         stepBuilding(w, i);
         continue;
       }
+      if ((x + y) % PHASES !== phase) continue;
       if (k === Kind.Forest) {
         // 市街地に囲まれた森は公園になる
         let urban = 0;
@@ -432,7 +479,7 @@ function growBuildings(w: World): void {
             if (nk === Kind.Building || nk === Kind.Road) urban++;
           }
         }
-        if (urban >= 4 && w.rng.chance(0.08 / 24)) w.kind[i] = Kind.Park;
+        if (urban >= 4 && w.rng.chance((0.08 * P) / 24)) w.kind[i] = Kind.Park;
       }
       if (!isBuildableGround(k)) continue;
       if (!isFlat(w, x, y)) continue;
@@ -450,7 +497,7 @@ function growBuildings(w: World): void {
             farmStyle = w.bStyle[j];
           }
         }
-        if (farms >= 2 && w.rng.chance(0.08 / 24)) {
+        if (farms >= 2 && w.rng.chance((0.08 * P) / 24)) {
           w.kind[i] = Kind.Farm;
           w.bStyle[i] = farmStyle;
           continue;
@@ -473,7 +520,7 @@ function growBuildings(w: World): void {
         }
       }
       if (roadDist === 0) {
-        if (k === Kind.Lot && w.lotTimer[i] > 60 && w.rng.chance(0.1 / 24)) w.kind[i] = Kind.Grass;
+        if (k === Kind.Lot && w.lotTimer[i] > 60 && w.rng.chance((0.1 * P) / 24)) w.kind[i] = Kind.Grass;
         // ぽつんと一軒家: 田畑や農道のそばの野原に、ごくまれに
         if ((k === Kind.Grass || k === Kind.Farm) && w.value[i] < 24) {
           let rural = false;
@@ -484,7 +531,7 @@ function growBuildings(w: World): void {
             const nk = w.kind[idx(w, nx, ny)];
             if (nk === Kind.Farm || nk === Kind.FarmPath) rural = true;
           }
-          if (rural && w.rng.chance(0.00012 / 24)) {
+          if (rural && w.rng.chance((0.00012 * P) / 24)) {
             startConstruction(w, i, 0);
           }
         }
@@ -497,9 +544,9 @@ function growBuildings(w: World): void {
       if (k === Kind.Forest) pDay *= 0.6;
       if (k === Kind.Farm) pDay *= 0.5;
       if (v < 8) pDay = 0;
-      if (w.rng.chance(pDay / 24)) {
+      if (w.rng.chance((pDay * P) / 24)) {
         startConstruction(w, i, v);
-      } else if (k === Kind.Lot && w.lotTimer[i] > 90 && w.rng.chance(0.05 / 24)) {
+      } else if (k === Kind.Lot && w.lotTimer[i] > 90 && w.rng.chance((0.05 * P) / 24)) {
         w.kind[i] = Kind.Grass;
       }
     }
