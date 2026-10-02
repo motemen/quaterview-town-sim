@@ -22,6 +22,17 @@ export const enum Kind {
   FarmPath = 11,
   /** 神社 */
   Shrine = 12,
+  /** 2x2 の建物の、アンカー以外の部分。bStyle = (ax-x) | ((ay-y) << 1) でアンカーへの相対位置 */
+  BuildingPart = 13,
+}
+
+/** 2x2 の高層タワー (bLevel) */
+export const LEVEL_BIG_TOWER = 8;
+
+/** BuildingPart からアンカーのタイル index を求める */
+export function partAnchor(w: World, i: number): number {
+  const off = w.bStyle[i];
+  return i + (off & 1) + (off >> 1) * w.w;
 }
 
 export const enum BState {

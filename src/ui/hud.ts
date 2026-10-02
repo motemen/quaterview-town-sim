@@ -1,6 +1,6 @@
 import { LEVEL_CAPACITY, isMixedUse } from "../sim/growth";
 import { SEASON_LABEL, seasonOf, toCalendar } from "../sim/time";
-import { BState, Kind, World, idx } from "../sim/world";
+import { BState, Kind, World, idx, partAnchor } from "../sim/world";
 
 const KIND_LABEL: Record<number, string> = {
   [Kind.Grass]: "草地",
@@ -16,9 +16,10 @@ const KIND_LABEL: Record<number, string> = {
   [Kind.Farm]: "田畑",
   [Kind.FarmPath]: "農道",
   [Kind.Shrine]: "神社",
+  [Kind.BuildingPart]: "建物",
 };
 
-const LEVEL_LABEL = ["", "住宅", "商店・アパート", "中層ビル", "高層ビル", "市役所", "タワー", "観覧車"];
+const LEVEL_LABEL = ["", "住宅", "商店・アパート", "中層ビル", "高層ビル", "市役所", "タワー", "観覧車", "超高層タワー"];
 
 export class Hud {
   private dateEl = document.getElementById("hud-date")!;
@@ -108,7 +109,8 @@ export class Hud {
   }
 
   showTile(world: World, x: number, y: number): void {
-    const i = idx(world, x, y);
+    let i = idx(world, x, y);
+    if (world.kind[i] === Kind.BuildingPart) i = partAnchor(world, i);
     const k = world.kind[i];
     let s = `(${x},${y}) ${KIND_LABEL[k] ?? "?"}`;
     if (k === Kind.Building) {

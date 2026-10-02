@@ -1,7 +1,8 @@
 import { fbm } from "./rng";
 import { maybeOpenStation } from "./rail";
 import { updateWeather } from "./weather";
-import { isLandmark, maybeStartLandmark, LANDMARK_LABEL } from "./landmarks";
+import { isLandmark, isPermanent, maybeStartLandmark, LANDMARK_LABEL } from "./landmarks";
+import { LEVEL_BIG_TOWER, partAnchor } from "./world";
 import { buildBranches, maybePlanBranch } from "./branch";
 import { seasonOf, toCalendar } from "./time";
 import {
@@ -28,11 +29,11 @@ import {
 } from "./world";
 
 /** 建物レベルごとの人口 */
-export const LEVEL_CAPACITY = [0, 4, 14, 40, 120, 0, 0, 0] as const;
+export const LEVEL_CAPACITY = [0, 4, 14, 40, 120, 0, 0, 0, 600] as const;
 /** 建設にかかる日数 */
-export const CONSTRUCTION_DAYS = [0, 3, 5, 9, 14, 20, 30, 24] as const;
+export const CONSTRUCTION_DAYS = [0, 3, 5, 9, 14, 20, 30, 24, 36] as const;
 /** 建物レベルごとの階数 (描画用) */
-export const LEVEL_FLOORS = [0, 1, 2, 5, 10, 1, 1, 1] as const;
+export const LEVEL_FLOORS = [0, 1, 2, 5, 10, 1, 1, 1, 30] as const;
 
 export const STATION_RADIUS = 22;
 export const MAX_BRIDGE_LEN = 5;
@@ -579,12 +580,89 @@ function startConstruction(w: World, i: number, v: number): void {
     // 高層ビルの階数は地価で決める (地価が高い中心部ほど高い)
     const extra = Math.max(0, Math.min(7, Math.floor((v - 88) / 9) + w.rng.int(2)));
     w.bStyle[i] = (w.bStyle[i] & ~0x1c) | (extra << 2);
+    // 地価がとても高ければ 2x2 のタワーに
+    if (v >= 100 && w.rng.chance(0.6)) tryBigTower(w, i);
   }
   w.bState[i] = BState.Constructing;
   w.bProgress[i] = 0;
   w.bAge[i] = 0;
   w.lotTimer[i] = 0;
   w.lights[i] = w.rng.int(16);
+}
+
+/** (x,y) を含む 2x2 の区画が確保できれば、2x2 タワーにする */
+function tryBigTower(w: World, i: number): void {
+  const x = i % w.w;
+  const y = Math.floor(i / w.w);
+  for (const [ox, oy] of [
+    [0, 0],
+    [-1, 0],
+    [0, -1],
+    [-1, -1],
+  ]) {
+    const x0 = x + ox;
+    const y0 = y + oy;
+    if (x0 < 0 || y0 < 0 || x0 + 1 >= w.w || y0 + 1 >= w.h) continue;
+    let okAll = true;
+    for (let dy = 0; dy <= 1 && okAll; dy++) {
+      for (let dx = 0; dx <= 1; dx++) {
+        const j = idx(w, x0 + dx, y0 + dy);
+        if (j === i) continue;
+        const k = w.kind[j];
+        const low = k === Kind.Building && w.bLevel[j] <= 4 && w.bState[j] !== BState.Constructing && w.bAge[j] > 30;
+        if (!(isBuildableGround(k) || low) || w.water[j] || !isFlat(w, x0 + dx, y0 + dy)) {
+          okAll = false;
+          break;
+        }
+      }
+    }
+    if (!okAll) continue;
+    const anchor = idx(w, x0 + 1, y0 + 1);
+    const style = w.bStyle[i];
+    for (let dy = 0; dy <= 1; dy++) {
+      for (let dx = 0; dx <= 1; dx++) {
+        const j = idx(w, x0 + dx, y0 + dy);
+        if (j === anchor) continue;
+        w.kind[j] = Kind.BuildingPart;
+        w.bStyle[j] = (1 - dx) | ((1 - dy) << 1);
+        w.bLevel[j] = 0;
+        w.bState[j] = BState.None;
+        w.lotTimer[j] = 0;
+      }
+    }
+    w.kind[anchor] = Kind.Building;
+    w.bLevel[anchor] = LEVEL_BIG_TOWER;
+    w.bStyle[anchor] = style;
+    w.bState[anchor] = BState.Constructing;
+    w.bProgress[anchor] = 0;
+    w.bAge[anchor] = 0;
+    w.lotTimer[anchor] = 0;
+    w.lights[anchor] = w.rng.int(16);
+    if (!(w.flags & 32)) {
+      w.flags |= 32;
+      w.events.push("超高層タワーの建設が始まりました");
+    }
+    return;
+  }
+}
+
+/** 2x2 の建物をまるごと取り壊す (i はアンカーか部分) */
+export function demolishBig(w: World, i: number): void {
+  const anchor = w.kind[i] === Kind.BuildingPart ? partAnchor(w, i) : i;
+  const ax = anchor % w.w;
+  const ay = Math.floor(anchor / w.w);
+  for (const [dx, dy] of [
+    [0, 0],
+    [-1, 0],
+    [0, -1],
+    [-1, -1],
+  ]) {
+    const x = ax + dx;
+    const y = ay + dy;
+    if (!inBounds(w, x, y)) continue;
+    const j = idx(w, x, y);
+    if (j === anchor || w.kind[j] === Kind.BuildingPart) demolish(w, j);
+  }
 }
 
 function stepBuilding(w: World, i: number): void {
@@ -612,7 +690,7 @@ function stepBuilding(w: World, i: number): void {
     }
     return;
   }
-  if (isLandmark(level)) return; // ランドマークは壊れない
+  if (isPermanent(level)) return; // ランドマークと 2x2 タワーは壊れない
   let target = levelForValue(w.value[i]);
   if (target > 2) {
     const x = i % w.w;
@@ -667,6 +745,7 @@ export function buildingFloors(level: number, style: number): number {
   if (level === 2) return isMixedUse(level, style) ? 3 : ((style >> 4) & 3) === 2 ? 1 : 2;
   if (level === 3) return isMixedUse(level, style) ? 6 : 5;
   if (level === 4) return 12 + ((style >> 2) & 7) * 2; // 12〜26 階
+  if (level === LEVEL_BIG_TOWER) return 28 + ((style >> 2) & 7) * 2; // 28〜42 階
   return LEVEL_FLOORS[level] ?? 1;
 }
 

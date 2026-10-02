@@ -724,6 +724,7 @@ export function buildingSprite(spec: BuildingSpec): { base: Sprite; emissive: Sp
   const key = `b:${spec.level}:${spec.style}:${spec.floors}:${spec.state}:${spec.lights}`;
   return pairCache.get(key, () => {
     if (spec.level === 1) return houseSprite(spec);
+    if (spec.level === 8) return bigTowerSprite(spec);
     if (spec.level >= 5) return landmarkSprite(spec);
     if (isMixedUse(spec.level, spec.style)) return mixedUseSprite(spec);
     return boxBuildingSprite(spec);
@@ -1083,6 +1084,121 @@ function boxBuildingSprite(spec: BuildingSpec): { base: Sprite; emissive: Sprite
     if (level >= 2) anyLight = true;
   }
   return { base: toSprite(r, 0, baseTop), emissive: anyLight ? toSprite(e, 0, baseTop) : null };
+}
+
+/**
+ * 2x2 の超高層タワー。幅 64 の菱形 (高さ 32) を底面とし、アンカー (右下のタイル) を基準に描く。
+ * ox = 16, oy = 高さ - 32 + 8。
+ */
+function bigTowerSprite(spec: BuildingSpec): { base: Sprite; emissive: Sprite | null } {
+  const W = 64;
+  const CELL = 32;
+  const CX = 32;
+  const CY = 16;
+  const fh = 6;
+  const total = buildingFloors(8, spec.style);
+  const constructing = spec.state === BState.Constructing;
+  const floors = constructing ? spec.floors : total;
+  const H = CELL + total * fh + 30;
+  const baseTop = H - CELL;
+  const r = new Raster(W, H);
+  const e = new Raster(W, H);
+  let anyLight = false;
+  const st = spec.style;
+  const wall: RGB = TOWER_WALLS[st % TOWER_WALLS.length];
+  const wallL = wall;
+  const wallR = shade(wall, 0.72);
+  const roof = shade(wall, 0.85);
+  const wallH = floors * fh;
+  const rows = (x: number): [number, number] => {
+    const d = x < CX ? x : W - 1 - x;
+    const k = Math.floor(d / 2);
+    return [CY - 1 - k, CY + k];
+  };
+  // 足元の広場
+  for (let x = 0; x < W; x++) {
+    const [yt, yb] = rows(x);
+    for (let y = yt; y <= yb; y++) r.set(x, y + baseTop, hash2(st, x, y) < 0.06 ? PAL.concreteDark : PAL.concrete);
+  }
+  // 塔は底面より少し小さく (幅 56)
+  const fw = 56;
+  const x0 = CX - fw / 2;
+  const x1 = CX + fw / 2;
+  const frows = (x: number): [number, number] => {
+    const d = x < CX ? x - x0 : x1 - 1 - x;
+    const k = Math.floor(d / 2);
+    return [CY - 1 - k, CY + k];
+  };
+  for (let x = x0; x < x1; x++) {
+    const [ytR, ybR] = frows(x);
+    const yt = ytR + baseTop;
+    const yb = ybR + baseTop;
+    const left = x < CX;
+    const along = left ? x - x0 : x1 - 1 - x;
+    const wc = left ? wallL : wallR;
+    for (let y = yb - wallH + 1; y <= yb; y++) r.set(x, y, wc);
+    // 窓: 2 列ごとに 1 列の柱
+    if (along % 3 !== 0 && along < fw / 2 - 2) {
+      for (let f = 0; f < floors; f++) {
+        const fTop = yb - (f + 1) * fh + 1;
+        const lit = !constructing && hash3(spec.lights, f, along >> 2, left ? 1 : 2) < 0.6;
+        const warm = hash3(spec.lights, f, along >> 2, 3) < 0.4;
+        for (let wy = 1; wy <= fh - 3; wy++) {
+          if (putWindow(r, e, x, fTop + wy, shade(PAL.windowDay, left ? 1 : 0.8), lit ? (warm ? PAL.windowLitWarm : PAL.windowLitCool) : null)) anyLight = true;
+        }
+      }
+    }
+    // 1 階のエントランス (左壁の中央寄り)
+    if (left && along >= fw / 2 - 8 && along <= fw / 2 - 3 && floors > 0) {
+      for (let y = yb - 4; y <= yb; y++) r.set(x, y, shade(wc, 0.5));
+      if (!constructing) {
+        e.set(x, yb - 4, PAL.windowLitWarm);
+        anyLight = true;
+      }
+    }
+    // 屋上
+    for (let y = yt - wallH; y <= yb - wallH; y++) {
+      const edge = y === yt - wallH || y === yb - wallH;
+      r.set(x, y, edge ? shade(roof, 0.75) : y === yt - wallH + 1 ? shade(roof, 1.1) : roof);
+    }
+    if (x === CX && wallH > 0) r.vline(x, yb - wallH + 1, yb, shade(wallR, 0.85));
+  }
+  if (!constructing) {
+    // ヘリポートとアンテナ、縁の灯り
+    const topY = baseTop + CY - 1 - wallH;
+    r.disc(CX - 8, topY + 2, 4.5, shade(roof, 0.9));
+    r.disc(CX - 8, topY + 2, 3.2, [236, 236, 228]);
+    r.set(CX - 8, topY + 2, roof);
+    r.vline(CX + 6, topY - 12, topY - 1, PAL.railDark);
+    r.set(CX + 6, topY - 13, PAL.redLight);
+    e.set(CX + 6, topY - 13, PAL.redLight);
+    e.set(x0 + 1, baseTop + CY - 1 - wallH + 8, PAL.redLight);
+    e.set(x1 - 2, baseTop + CY - 1 - wallH + 8, PAL.redLight);
+    anyLight = true;
+  } else if (floors < total) {
+    // 足場とクレーン (2 基)
+    for (let x = x0; x < x1; x++) {
+      const [, ybR] = frows(x);
+      const yb = ybR + baseTop;
+      const top = yb - (floors + 1) * fh + 1;
+      for (let y = top; y <= yb - floors * fh; y++) {
+        const along = x < CX ? x - x0 : x1 - 1 - x;
+        if (along % 3 === 0 || (y - top) % 3 === 0) r.set(x, y, PAL.scaffold);
+      }
+    }
+    for (const mx of [CX - 10, CX + 12]) {
+      const [, ybR] = frows(mx);
+      const base = ybR + baseTop - (floors + 1) * fh;
+      const top = base - 16;
+      for (let y = top; y <= base; y++) r.set(mx, y, (y - top) % 2 === 0 ? PAL.crane : PAL.craneDark);
+      r.hline(mx - 12, mx + 8, top, PAL.crane);
+      r.vline(mx + 6, top + 1, top + 7, PAL.railDark);
+      r.set(mx, top - 1, PAL.redLight);
+      e.set(mx, top - 1, PAL.redLight);
+      anyLight = true;
+    }
+  }
+  return { base: toSprite(r, 16, baseTop + 8), emissive: anyLight ? toSprite(e, 16, baseTop + 8) : null };
 }
 
 /** ランドマーク: 市役所 (5)、タワー (6)、観覧車 (7) */

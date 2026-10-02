@@ -1,4 +1,5 @@
 import { makePlaceName } from "./names";
+import { demolishBig } from "./growth";
 import {
   BState,
   DX8,
@@ -18,6 +19,7 @@ import {
   DIR_E,
   DIR_W,
   updateSlopes,
+  LEVEL_BIG_TOWER,
 } from "./world";
 
 /** 支線: 本線の駅のそばから 135° で分岐し、北か南へ伸びて終点駅に至る */
@@ -213,7 +215,7 @@ function ok(w: World, x: number, y: number, nearMain: boolean): boolean {
   if (!inBounds(w, x, y)) return false;
   const i = idx(w, x, y);
   const k = w.kind[i];
-  if (isRailLike(k) || k === Kind.Shrine) return false;
+  if (isRailLike(k) || k === Kind.Shrine || k === Kind.BuildingPart) return false;
   if (k === Kind.Building && w.bLevel[i] >= 5) return false;
   if (nearMain) return !w.water[i];
   // 他の線路のすぐ隣は避ける
@@ -337,11 +339,15 @@ export function flattenForRail(w: World, x: number, y: number): void {
       const i = idx(w, tx, ty);
       const k = w.kind[i];
       const s = slopeOf(cornerHeights(w, tx, ty));
-      if (k === Kind.Building && s !== Slope.Flat) {
-        w.kind[i] = Kind.Lot;
-        w.bState[i] = BState.None;
-        w.bLevel[i] = 0;
-        w.lotTimer[i] = 0;
+      if ((k === Kind.Building || k === Kind.BuildingPart) && s !== Slope.Flat) {
+        if (k === Kind.BuildingPart || w.bLevel[i] === LEVEL_BIG_TOWER) {
+          demolishBig(w, i);
+        } else {
+          w.kind[i] = Kind.Lot;
+          w.bState[i] = BState.None;
+          w.bLevel[i] = 0;
+          w.lotTimer[i] = 0;
+        }
       } else if (k === Kind.Road && s === Slope.Irregular) {
         w.kind[i] = Kind.Grass;
       } else if (k === Kind.Farm && !isFlat(w, tx, ty)) {

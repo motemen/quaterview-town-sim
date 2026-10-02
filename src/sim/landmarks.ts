@@ -15,6 +15,11 @@ const PLAN: { level: number; population: number }[] = [
 ];
 
 export function isLandmark(level: number): boolean {
+  return level >= 5 && level <= 7;
+}
+
+/** 取り壊されない建物か (ランドマークと 2x2 タワー) */
+export function isPermanent(level: number): boolean {
   return level >= 5;
 }
 

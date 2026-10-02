@@ -93,6 +93,7 @@ export class TilePainter {
     else if (k === Kind.Lot) ground = w.lotTimer[i] < 20 ? "rubble" : "lot";
     else if (k === Kind.Park) ground = "park";
     else if (k === Kind.Building) ground = w.bLevel[i] >= 2 ? "concrete" : "grass";
+    else if (k === Kind.BuildingPart) ground = "concrete";
     else if (k === Kind.Farm) ground = (["paddy", "field", "flower", "orchard"] as const)[w.bStyle[i] & 3];
     else if (k === Kind.FarmPath) ground = "farmpath";
     else if (k === Kind.Shrine) ground = "grass";
@@ -332,7 +333,7 @@ interface Chunk {
 
 export const CHUNK = 32;
 /** 建物やタワーが上に伸びるぶんの余白 (px) */
-const CHUNK_TOP = 200;
+const CHUNK_TOP = 330;
 const CHUNK_BOTTOM = 40;
 const MAX_CHUNKS = 28;
 
@@ -596,7 +597,7 @@ export class DynamicLayer {
     }
     const d0 = x - y;
     const s0 = x + y;
-    for (let s = s0 + 1; s <= s0 + 24; s++) {
+    for (let s = s0 + 1; s <= s0 + 44; s++) {
       for (let d = d0 - 2; d <= d0 + 2; d++) {
         if ((s + d) % 2 !== 0) continue;
         const tx = (s + d) / 2;

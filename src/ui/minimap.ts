@@ -125,6 +125,8 @@ function tileColor(w: World, i: number): [number, number, number] {
       if (lv >= 5) return [255, 160, 60];
       return lv >= 3 ? [200, 200, 210] : lv === 2 ? [224, 196, 150] : [220, 150, 120];
     }
+    case Kind.BuildingPart:
+      return [200, 200, 210];
     case Kind.Farm:
       return [168, 160, 88];
     case Kind.FarmPath:
