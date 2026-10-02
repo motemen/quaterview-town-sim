@@ -31,14 +31,21 @@ export interface Branch {
   from: number;
   /** 終点駅の広場の向き (1=東 3=西) */
   plazaDir: number;
+  /** 延伸した回数 */
+  extensions?: number;
+  /** 延伸中の新しい終点の名前 */
+  pendingName?: string;
 }
+
+const MAX_EXTENSIONS = 2;
 
 const MAX_BRANCHES = 4;
 const TILES_PER_DAY = 2;
 
-/** 10 日に 1 回: 条件が揃えば新しい支線を計画する */
+/** 10 日に 1 回: 条件が揃えば新しい支線を計画する (既存の支線の延伸を優先) */
 export function maybePlanBranch(w: World): boolean {
-  if (w.population < 2500) return false;
+  if (w.population < 2000) return false;
+  if (maybeExtendBranch(w)) return true;
   const limit = Math.min(MAX_BRANCHES, Math.max(1, Math.floor(w.stations.length / 2)));
   if (w.branches.length >= limit) return false;
   // 候補の駅: 本線上で、周囲に建物が多く、まだ支線のない駅
@@ -69,6 +76,75 @@ export function maybePlanBranch(w: World): boolean {
   w.branches.push({ tiles: best.tiles, built: 0, done: false, name, from: best.from, plazaDir: best.plazaDir });
   w.events.push(`${name}線の建設が始まりました`);
   return true;
+}
+
+/** 開通済みの支線の終点がにぎわってきたら、同じ向きにさらに伸ばす */
+function maybeExtendBranch(w: World): boolean {
+  for (const b of w.branches) {
+    if (!b.done || (b.extensions ?? 0) >= MAX_EXTENSIONS) continue;
+    const [tx, ty] = b.tiles[b.tiles.length - 1];
+    let buildings = 0;
+    for (let dy = -8; dy <= 8; dy++) {
+      for (let dx = -8; dx <= 8; dx++) {
+        const x = tx + dx;
+        const y = ty + dy;
+        if (inBounds(w, x, y) && w.kind[idx(w, x, y)] === Kind.Building) buildings++;
+      }
+    }
+    if (buildings < 10) continue;
+    const [px, py] = b.tiles[b.tiles.length - 2];
+    const dir = Math.sign(ty - py) || 1;
+    const ext = planExtension(w, tx, ty, dir);
+    if (!ext) continue;
+    const name = makePlaceName(w.rng, new Set(w.stations.map((s) => s.name ?? "")));
+    b.tiles.push(...ext.tiles);
+    b.done = false;
+    b.plazaDir = ext.plazaDir;
+    b.extensions = (b.extensions ?? 0) + 1;
+    b.name = b.name; // 路線名はそのまま
+    w.events.push(`${b.name}線が${name}まで延伸工事に入りました`);
+    b.pendingName = name;
+    return true;
+  }
+  return false;
+}
+
+/** 終点 (tx,ty) から dir 方向へまっすぐ伸ばす経路 (終点は含まない) */
+function planExtension(w: World, tx: number, ty: number, dir: number): { tiles: [number, number][]; plazaDir: number } | null {
+  const tiles: [number, number][] = [];
+  const maxLen = 14 + w.rng.int(12);
+  let waterRun = 0;
+  let y = ty;
+  for (let k = 0; k < maxLen; k++) {
+    const ny = y + dir;
+    if (!inBounds(w, tx, ny) || ny < 3 || ny > w.h - 4) break;
+    if (!ok(w, tx, ny, k === 0)) break;
+    if (w.water[idx(w, tx, ny)]) {
+      waterRun++;
+      if (waterRun > 4) {
+        while (tiles.length > 0 && w.water[idx(w, tiles[tiles.length - 1][0], tiles[tiles.length - 1][1])]) tiles.pop();
+        break;
+      }
+    } else waterRun = 0;
+    y = ny;
+    tiles.push([tx, y]);
+  }
+  while (tiles.length > 0) {
+    const [ex, ey] = tiles[tiles.length - 1];
+    if (!w.water[idx(w, ex, ey)]) {
+      for (const plazaDir of [1, 3]) {
+        const px = ex + (plazaDir === 1 ? 1 : -1);
+        if (!inBounds(w, px, ey)) continue;
+        const pi = idx(w, px, ey);
+        if (w.water[pi] || isRailLike(w.kind[pi]) || w.kind[pi] === Kind.Shrine) continue;
+        if (w.kind[pi] === Kind.Building && w.bLevel[pi] >= 5) continue;
+        if (tiles.length < 10) return null;
+        return { tiles, plazaDir };
+      }
+    }
+    tiles.pop();
+  }
+  return null;
 }
 
 /** 駅 (sx,sy) の隣 (side: 1=東 -1=西) から分岐し、dir (-1=北 1=南) へ伸びる経路を作る */
@@ -160,9 +236,11 @@ export function buildBranches(w: World): void {
     if (b.built >= b.tiles.length) {
       b.done = true;
       const [tx, ty] = b.tiles[b.tiles.length - 1];
-      w.stations.push({ x: tx, y: ty, plazaDir: b.plazaDir, name: b.name });
+      const name = b.pendingName ?? b.name;
+      b.pendingName = undefined;
+      w.stations.push({ x: tx, y: ty, plazaDir: b.plazaDir, name });
       w.stationsChanged = true;
-      w.events.push(`${b.name}線が開通し、${b.name}駅ができました`);
+      w.events.push(b.extensions ? `${b.name}線が${name}駅まで延伸しました` : `${b.name}線が開通し、${name}駅ができました`);
     }
   }
 }

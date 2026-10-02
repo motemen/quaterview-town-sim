@@ -122,8 +122,8 @@ export function computeLandValue(w: World, totalDays: number): void {
         continue;
       }
       let v = 72 * Math.pow(station[i], 1.4);
-      // 道路アクセス (4 近傍)
-      if ((x > 0 && roadNear[i - 1]) || (x < W - 1 && roadNear[i + 1]) || (y > 0 && roadNear[i - W]) || (y < H - 1 && roadNear[i + W])) v += 10;
+      // 道路は地価を少ししか上げない (建物が集まってはじめて上がる)
+      if ((x > 0 && roadNear[i - 1]) || (x < W - 1 && roadNear[i + 1]) || (y > 0 && roadNear[i - W]) || (y < H - 1 && roadNear[i + W])) v += 4;
       const density = rectSum(densSum, W, H, x - 2, y - 2, x + 2, y + 2) - dens[i];
       const amenity = rectSum(amenSum, W, H, x - 1, y - 1, x + 1, y + 1) * 5;
       v += Math.min(48, density * 1.1);
@@ -541,12 +541,12 @@ function growBuildings(w: World, hour: number): void {
         continue;
       }
       const v = w.value[i];
-      let pDay = Math.pow(v / 100, 2) * 0.45;
+      let pDay = Math.pow(v / 100, 2.2) * 0.5;
       if (roadDist === 2) pDay *= 0.4;
       if (k === Kind.Lot) pDay *= 3;
       if (k === Kind.Forest) pDay *= 0.6;
       if (k === Kind.Farm) pDay *= 0.5;
-      if (v < 8) pDay = 0;
+      if (v < 12) pDay = 0;
       if (w.rng.chance((pDay * P) / 24)) {
         startConstruction(w, i, v);
       } else if (k === Kind.Lot && w.lotTimer[i] > 90 && w.rng.chance((0.05 * P) / 24)) {
