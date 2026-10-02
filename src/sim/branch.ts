@@ -1,5 +1,5 @@
 import { makePlaceName } from "./names";
-import { demolishBig } from "./growth";
+import { flattenTile } from "./terraform";
 import {
   BState,
   DX8,
@@ -9,17 +9,11 @@ import {
   World,
   idx,
   inBounds,
-  isFlat,
   isRailLike,
   railIsStraightX,
   roadConnections,
-  slopeOf,
-  cornerHeights,
-  Slope,
   DIR_E,
   DIR_W,
-  updateSlopes,
-  LEVEL_BIG_TOWER,
 } from "./world";
 
 /** 支線: 本線の駅のそばから 135° で分岐し、北か南へ伸びて終点駅に至る */
@@ -290,70 +284,7 @@ function layTile(w: World, b: Branch, k: number): void {
   }
 }
 
-/** 頂点が固定されているか: 水面のタイル (0) か線路のタイル (1) に属する */
-function vertexFixed(w: World, vx: number, vy: number): boolean {
-  for (const [dx, dy] of [[-1, -1], [0, -1], [-1, 0], [0, 0]]) {
-    const x = vx + dx;
-    const y = vy + dy;
-    if (!inBounds(w, x, y)) continue;
-    const i = idx(w, x, y);
-    if (isRailLike(w.kind[i]) || (w.water[i] && w.kind[i] === Kind.Water)) return true;
-  }
-  return false;
-}
-
 /** タイル (x,y) の 4 頂点を線路の高さ 1 にして、周囲をなだらかにする */
 export function flattenForRail(w: World, x: number, y: number): void {
-  const S = w.w + 1;
-  const queue: number[] = [];
-  for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
-    const v = (y + dy) * S + (x + dx);
-    w.height[v] = 1;
-    queue.push(v);
-  }
-  // 下げるだけの緩和: 隣より 2 以上高い頂点を下げていく
-  const minX = Math.max(0, x - 6);
-  const maxX = Math.min(w.w, x + 7);
-  const minY = Math.max(0, y - 6);
-  const maxY = Math.min(w.h, y + 7);
-  while (queue.length) {
-    const v = queue.pop()!;
-    const vx = v % S;
-    const vy = Math.floor(v / S);
-    const h = w.height[v];
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-      const nx = vx + dx;
-      const ny = vy + dy;
-      if (nx < minX || ny < minY || nx > maxX || ny > maxY) continue;
-      const nv = ny * S + nx;
-      if (w.height[nv] > h + 1 && !vertexFixed(w, nx, ny)) {
-        w.height[nv] = h + 1;
-        queue.push(nv);
-      }
-    }
-  }
-  updateSlopes(w);
-  // 傾いてしまった建物や道路を片づける
-  for (let ty = minY; ty < maxY && ty < w.h; ty++) {
-    for (let tx = minX; tx < maxX && tx < w.w; tx++) {
-      const i = idx(w, tx, ty);
-      const k = w.kind[i];
-      const s = slopeOf(cornerHeights(w, tx, ty));
-      if ((k === Kind.Building || k === Kind.BuildingPart) && s !== Slope.Flat) {
-        if (k === Kind.BuildingPart || w.bLevel[i] === LEVEL_BIG_TOWER) {
-          demolishBig(w, i);
-        } else {
-          w.kind[i] = Kind.Lot;
-          w.bState[i] = BState.None;
-          w.bLevel[i] = 0;
-          w.lotTimer[i] = 0;
-        }
-      } else if (k === Kind.Road && s === Slope.Irregular) {
-        w.kind[i] = Kind.Grass;
-      } else if (k === Kind.Farm && !isFlat(w, tx, ty)) {
-        w.kind[i] = Kind.Grass;
-      }
-    }
-  }
-  w.terrainChanged = true;
+  flattenTile(w, x, y, 1, true);
 }

@@ -3,7 +3,7 @@ import { clearSpriteCache, spriteAtlasNearlyFull } from "./render/sprites";
 import { TrainSystem } from "./sim/trains";
 import { hashString } from "./sim/rng";
 import { SAVE_KEY, deserialize, serialize } from "./sim/save";
-import { advance, newWorld } from "./sim/sim";
+import { advance, advanceDay, newWorld } from "./sim/sim";
 import { Season, nightFactor, seasonOf, skyColor, tintColor, toCalendar } from "./sim/time";
 import { Weather } from "./sim/weather";
 import { drawPrecipitation } from "./render/effects";
@@ -47,7 +47,7 @@ function loadWorld(): World {
   const w = newWorld(seed);
   // デバッグ用: ?days=N で N 日ぶん進めた状態から始める、?hour=H で時刻を変える
   const days = Number(params.get("days") ?? 0);
-  for (let d = 0; d < days; d++) advance(w, 60, 1);
+  for (let d = 0; d < days; d++) advanceDay(w);
   const month = params.get("month");
   if (month !== null) {
     // 月だけ変える (年初からの日数で指定)
@@ -136,7 +136,7 @@ function processJump(): void {
   // 1 フレームにまとめて進め、描画の更新は数フレームに 1 回だけにして軽くする
   const t0 = performance.now();
   while (jumpQueue > 0 && performance.now() - t0 < 60) {
-    advance(world, 60, 1);
+    advanceDay(world);
     jumpQueue--;
   }
   jumpFrames++;

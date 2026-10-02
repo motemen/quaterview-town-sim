@@ -28,3 +28,14 @@ export function advance(w: World, dtSeconds: number, speed: number): void {
   }
   if (w.lastHour < hourNow) w.lastHour = hourNow;
 }
+
+/** 1 日ぶんを一気に進める (ジャンプ用)。advance と同じ 1 時間ステップを 24 回行う。 */
+export function advanceDay(w: World): void {
+  w.minutes += MINUTES_PER_DAY;
+  const hourNow = Math.floor(w.minutes / 60);
+  while (w.lastHour < hourNow) {
+    w.lastHour++;
+    const cal = toCalendar(w.lastHour * 60);
+    hourlyStep(w, cal.hour, cal.totalDays);
+  }
+}

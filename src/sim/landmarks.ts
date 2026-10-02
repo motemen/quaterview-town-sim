@@ -33,6 +33,7 @@ export function maybeStartLandmark(w: World): void {
     if (site < 0) continue;
     w.flags |= flag;
     w.kind[site] = Kind.Building;
+    w.cache.buildings.push(site);
     w.bLevel[site] = p.level;
     w.bStyle[site] = w.rng.int(256);
     w.bState[site] = BState.Constructing;

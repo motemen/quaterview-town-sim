@@ -120,6 +120,26 @@ export interface World {
   branches: import("./branch").Branch[];
   /** 地形が変わったことを描画側に知らせるフラグ */
   terrainChanged: boolean;
+  /** 高速化用の一時データ (保存しない) */
+  cache: WorldCache;
+}
+
+export interface WorldCache {
+  /** 位相ごとのタイル index リスト (growBuildings 用) */
+  phases: Int32Array[] | null;
+  /** 建物タイルの index (1 日 1 回作り直し、建設開始時に追加) */
+  buildings: number[];
+  /** 道路・建物の数 (1 日 1 回集計) */
+  roads: number;
+  buildingCount: number;
+  /** 集計した日 */
+  countedDay: number;
+  /** 変化しうるタイル (1 日 1 回作る)。null なら全タイル */
+  active: Uint8Array | null;
+}
+
+export function emptyCache(): WorldCache {
+  return { phases: null, buildings: [], roads: -1, buildingCount: 0, countedDay: -1, active: null };
 }
 
 export function createEmptyWorld(seed: number, w = MAP_W, h = MAP_H): World {
@@ -154,6 +174,7 @@ export function createEmptyWorld(seed: number, w = MAP_W, h = MAP_H): World {
     flags: 0,
     branches: [],
     terrainChanged: false,
+    cache: emptyCache(),
   };
 }
 
