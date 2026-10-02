@@ -39,7 +39,6 @@ html, body {
   white-space: nowrap;
 }
 #hud .spacer { flex: 1; }
-#hud #hud-info { color: var(--hud-accent); overflow: hidden; text-overflow: ellipsis; }
 #hud button {
   font: inherit;
   color: var(--hud-fg);
@@ -102,7 +101,6 @@ html, body {
     padding-bottom: calc(4px + env(safe-area-inset-bottom));
   }
   #hud .spacer { display: none; }
-  #hud #hud-info { flex-basis: 100%; font-size: 13px; }
   #hud #hud-news { max-width: 100%; flex-basis: 100%; font-size: 13px; }
   #hud button { padding: 0 6px; }
   #minimap {
@@ -113,3 +111,18 @@ html, body {
   }
   #help { width: 90vw; font-size: 14px; line-height: 20px; }
 }
+
+/* クリックしたマスの情報 (左上) */
+#tile-info {
+  position: fixed;
+  left: 8px;
+  top: 8px;
+  max-width: min(60vw, 420px);
+  background: rgba(26, 26, 46, 0.92);
+  color: var(--hud-accent);
+  border: 2px solid #4a4a7e;
+  padding: 4px 10px;
+  font-size: 15px;
+  line-height: 22px;
+}
+#btn-speed { min-width: 64px; }

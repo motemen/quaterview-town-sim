@@ -94,7 +94,8 @@ let fireworkBursts = 0;
 {
   const btn = document.getElementById("btn-sound") as HTMLButtonElement;
   const label = () => {
-    btn.textContent = sound.enabled ? "♪ ON" : "♪ OFF";
+    btn.textContent = "♪";
+    btn.title = sound.enabled ? "環境音 ON" : "環境音 OFF";
     btn.classList.toggle("active", sound.enabled);
   };
   btn.addEventListener("click", () => {
@@ -318,6 +319,7 @@ function frame(now: number): void {
   draw();
   hud.update(world);
   hud.pumpNews(world, now);
+  hud.tick(now);
   minimap.draw();
   if (now - lastSave > 15000) {
     lastSave = now;

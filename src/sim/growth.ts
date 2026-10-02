@@ -499,13 +499,13 @@ function edgeHeight(w: World, x: number, y: number, dir: number): number {
 
 function growRoads(w: World, hours: number, totalDays: number): void {
   const { roads, buildings } = countKinds(w, totalDays);
-  let perDay = Math.min(1.5, 0.35 + buildings / 80);
+  let perDay = Math.min(1.4, 0.35 + buildings / 90);
   // 建物に対して道路が多すぎるときは伸ばさない (発展が止まれば道路も止まる)
-  if (roads > buildings * 0.8 + 12) {
+  if (roads > buildings * 0.6 + 12) {
     stats.roadGated++;
     return;
   }
-  if (roads > buildings * 0.6 + 8) perDay *= 0.3;
+  if (roads > buildings * 0.45 + 8) perDay *= 0.4;
   const expected = (perDay * hours) / 24;
   let attempts = Math.floor(expected);
   if (w.rng.chance(expected - attempts)) attempts++;
@@ -588,7 +588,7 @@ function extendRoadOnce(w: World): void {
           weight *= canGoStraight ? 0.05 : 0.6;
         } else if (isStraightMid) {
           // 直線道路からの枝分かれ: 交差点や角から離れているところだけ
-          weight *= nearJunction(w, x, y, 4) ? 0.005 : 0.15;
+          weight *= nearJunction(w, x, y, 5) ? 0.003 : 0.08;
         } else {
           weight *= 0.05; // 交差点や角からさらに曲がる
         }
@@ -654,7 +654,7 @@ function extendRoadOnce(w: World): void {
         if (c.kinds[k] === Kind.Road) w.cache.roads++;
       }
       // まっすぐ伸びる場合は、何マスか続けて伸ばして長い通りにする
-      const extra = 1 + w.rng.int(4);
+      const extra = 1 + w.rng.int(3);
       let cx = c.tiles[c.tiles.length - 1] % w.w;
       let cy = Math.floor(c.tiles[c.tiles.length - 1] / w.w);
       for (let k = 0; k < extra; k++) {

@@ -25,12 +25,15 @@ export class Hud {
   private dateEl = document.getElementById("hud-date")!;
   private clockEl = document.getElementById("hud-clock")!;
   private popEl = document.getElementById("hud-pop")!;
-  private infoEl = document.getElementById("hud-info")!;
+  private infoEl = document.getElementById("tile-info")!;
+  private speedBtn = document.getElementById("btn-speed") as HTMLButtonElement;
+  private infoUntil = 0;
   private newsEl = document.getElementById("hud-news")!;
   private townEl = document.getElementById("hud-town")!;
   private newsQueue: string[] = [];
   private newsUntil = 0;
-  private speedButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("#hud button[data-speed]"));
+  private static SPEEDS = [0, 1, 4, 16];
+  private static SPEED_LABEL: Record<number, string> = { 0: "❚❚", 1: "▶", 4: "▶▶", 16: "▶▶▶" };
   private lastText = "";
 
   constructor(
@@ -38,9 +41,11 @@ export class Hud {
     onReset: () => void,
     private onJump: (days: number) => void,
   ) {
-    for (const b of this.speedButtons) {
-      b.addEventListener("click", () => this.setSpeed(Number(b.dataset.speed)));
-    }
+    this.speedBtn.addEventListener("click", () => {
+      const i = Hud.SPEEDS.indexOf(this.currentSpeed);
+      this.setSpeed(Hud.SPEEDS[(i + 1) % Hud.SPEEDS.length]);
+    });
+    this.infoEl.addEventListener("click", () => (this.infoEl.hidden = true));
     for (const b of document.querySelectorAll<HTMLButtonElement>("#hud button[data-jump]")) {
       b.addEventListener("click", () => this.onJump(Number(b.dataset.jump)));
     }
@@ -65,7 +70,8 @@ export class Hud {
 
   setSpeed(speed: number): void {
     this.currentSpeed = speed;
-    for (const b of this.speedButtons) b.classList.toggle("active", Number(b.dataset.speed) === speed);
+    this.speedBtn.textContent = Hud.SPEED_LABEL[speed] ?? "▶";
+    this.speedBtn.classList.toggle("active", speed > 0);
     this.onSpeed(speed);
   }
 
@@ -106,6 +112,16 @@ export class Hud {
   /** 情報欄に一時的なメッセージを出す */
   flash(text: string): void {
     this.infoEl.textContent = text;
+    this.infoEl.hidden = false;
+    this.infoUntil = performance.now() + 6000;
+  }
+
+  /** 一時的なメッセージの自動消去 (毎フレーム呼ぶ) */
+  tick(now: number): void {
+    if (this.infoUntil && now > this.infoUntil) {
+      this.infoUntil = 0;
+      this.infoEl.hidden = true;
+    }
   }
 
   showTile(world: World, x: number, y: number): void {
@@ -126,5 +142,7 @@ export class Hud {
     if (k === Kind.Rail && world.water[i]) s = `(${x},${y}) 鉄橋`;
     s += ` / 地価 ${world.value[i]}`;
     this.infoEl.textContent = s;
+    this.infoEl.hidden = false;
+    this.infoUntil = 0;
   }
 }
