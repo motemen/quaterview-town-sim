@@ -130,20 +130,24 @@ function jumpDays(days: number): void {
   jumpTotal = jumpQueue;
 }
 
+let jumpFrames = 0;
 function processJump(): void {
   if (jumpQueue <= 0) return;
-  // 1 フレームで数日ぶん (重すぎない範囲で)
+  // 1 フレームにまとめて進め、描画の更新は数フレームに 1 回だけにして軽くする
   const t0 = performance.now();
-  while (jumpQueue > 0 && performance.now() - t0 < 24) {
+  while (jumpQueue > 0 && performance.now() - t0 < 60) {
     advance(world, 60, 1);
     jumpQueue--;
   }
+  jumpFrames++;
   if (world.stationsChanged) {
     world.stationsChanged = false;
     trains.refresh(world);
   }
-  layer.detectChanges();
-  minimap.refresh();
+  if (jumpQueue === 0 || jumpFrames % 12 === 0) {
+    layer.detectChanges();
+    minimap.refresh();
+  }
   if (jumpQueue === 0) {
     save(world);
     const cal = toCalendar(world.minutes);
@@ -162,7 +166,7 @@ window.addEventListener("resize", resize);
 resize();
 {
   const st = world.stations[0];
-  cam.zoom = window.innerWidth > 1400 ? 3 : 2;
+  cam.zoom = window.innerWidth > 1400 ? 2.5 : window.innerWidth > 700 ? 2 : 1.5;
   cam.centerOnTile(st ? st.x : world.w / 2, st ? st.y : world.h / 2);
   // デバッグ用: ?at=x,y でカメラの中心を指定
   const at = new URLSearchParams(location.search).get("at");
@@ -230,6 +234,7 @@ const minimap = new Minimap(world, cam);
 window.addEventListener("keydown", (e) => {
   if (e.key === "m" || e.key === "M") minimap.toggle();
 });
+document.getElementById("btn-map")!.addEventListener("click", () => minimap.toggle());
 
 attachInput(canvas, cam, {
   onClick(cx, cy) {

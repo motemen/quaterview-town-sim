@@ -68,35 +68,69 @@ export interface InputHandlers {
 
 /** ドラッグ・ホイール・キーボードでカメラを操作する */
 export function attachInput(canvas: HTMLCanvasElement, cam: Camera, handlers: InputHandlers): void {
-  let dragging = false;
+  // ポインタ (マウス・タッチ) を ID ごとに追跡。1 本ならドラッグ、2 本ならピンチズーム
+  const pointers = new Map<number, { x: number; y: number }>();
   let moved = false;
-  let lastX = 0;
-  let lastY = 0;
+  let pinchDist = 0;
+  let pinchZoom = 1;
+  const pinchCenter = (): [number, number] => {
+    const pts = [...pointers.values()];
+    return [(pts[0].x + pts[1].x) / 2, (pts[0].y + pts[1].y) / 2];
+  };
+  const pinchDistance = (): number => {
+    const pts = [...pointers.values()];
+    return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+  };
   canvas.addEventListener("pointerdown", (e) => {
-    dragging = true;
-    moved = false;
-    lastX = e.clientX;
-    lastY = e.clientY;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     canvas.setPointerCapture(e.pointerId);
+    if (pointers.size === 1) moved = false;
+    if (pointers.size === 2) {
+      pinchDist = pinchDistance();
+      pinchZoom = cam.zoom;
+      moved = true;
+    }
   });
   canvas.addEventListener("pointermove", (e) => {
-    if (!dragging) return;
-    const dx = e.clientX - lastX;
-    const dy = e.clientY - lastY;
-    if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
-    if (moved) {
-      cam.x -= dx / cam.zoom;
-      cam.y -= dy / cam.zoom;
-      canvas.classList.add("dragging");
-      lastX = e.clientX;
-      lastY = e.clientY;
+    const prev = pointers.get(e.pointerId);
+    if (!prev) return;
+    if (pointers.size === 1) {
+      const dx = e.clientX - prev.x;
+      const dy = e.clientY - prev.y;
+      if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
+      if (moved) {
+        cam.x -= dx / cam.zoom;
+        cam.y -= dy / cam.zoom;
+        canvas.classList.add("dragging");
+        pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      }
+    } else if (pointers.size === 2) {
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const d = pinchDistance();
+      if (pinchDist > 0) {
+        // 連続的な倍率を一番近い段階に丸める
+        const want = pinchZoom * (d / pinchDist);
+        let best = ZOOM_LEVELS[0] as number;
+        for (const z of ZOOM_LEVELS) if (Math.abs(z - want) < Math.abs(best - want)) best = z;
+        if (best !== cam.zoom) {
+          const [cx, cy] = pinchCenter();
+          cam.zoomAt(cx, cy, best);
+        }
+      }
     }
   });
   const end = (e: PointerEvent) => {
-    if (!dragging) return;
-    dragging = false;
-    canvas.classList.remove("dragging");
-    if (!moved) handlers.onClick(e.clientX, e.clientY);
+    const had = pointers.has(e.pointerId);
+    pointers.delete(e.pointerId);
+    if (!had) return;
+    if (pointers.size === 0) {
+      canvas.classList.remove("dragging");
+      if (!moved) handlers.onClick(e.clientX, e.clientY);
+    } else if (pointers.size === 1) {
+      // ピンチ終了後はドラッグとして続ける
+      moved = true;
+      pinchDist = 0;
+    }
   };
   canvas.addEventListener("pointerup", end);
   canvas.addEventListener("pointercancel", end);

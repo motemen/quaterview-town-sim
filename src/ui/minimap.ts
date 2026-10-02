@@ -39,6 +39,12 @@ export class Minimap {
       e.stopPropagation();
     });
     this.refresh();
+    try {
+      if (localStorage.getItem("quaterview-town-sim/minimap") === "0") this.toggle();
+    } catch {
+      // 保存できなくてもよい
+    }
+    document.getElementById("btn-map")?.classList.toggle("active", this.visible);
   }
 
   setWorld(world: World): void {
@@ -49,6 +55,12 @@ export class Minimap {
   toggle(): void {
     this.visible = !this.visible;
     this.canvas.hidden = !this.visible;
+    document.getElementById("btn-map")?.classList.toggle("active", this.visible);
+    try {
+      localStorage.setItem("quaterview-town-sim/minimap", this.visible ? "1" : "0");
+    } catch {
+      // 保存できなくてもよい
+    }
   }
 
   /** タイルの色を描き直す (1 時間ごとなど) */
