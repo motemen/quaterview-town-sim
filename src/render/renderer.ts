@@ -340,7 +340,8 @@ export const CHUNK = 32;
 /** 建物やタワーが上に伸びるぶんの余白 (px) */
 const CHUNK_TOP = 330;
 const CHUNK_BOTTOM = 40;
-const MAX_CHUNKS = 16;
+/** 保持するチャンク数の目安。見えているチャンクは捨てないので、ズームアウト時はこれを超えることがある */
+const MAX_CHUNKS = 24;
 /** 1 チャンクの全描画でおよそ何タイル描くか (描画予算の単位) */
 const CHUNK_TILE_COST = 3600;
 /** 1 フレームに描くタイル数の予算 (チャンク 3 つぶん) */
@@ -543,9 +544,10 @@ export class MapLayer {
     return c;
   }
 
+  /** いちばん長く使っていないチャンクを捨てる。このフレームで使ったものは捨てない (見えているぶんは常に保持する) */
   private evict(): void {
     let oldest: Chunk | null = null;
-    for (const c of this.chunks.values()) if (!oldest || c.lastUsed < oldest.lastUsed) oldest = c;
+    for (const c of this.chunks.values()) if (c.lastUsed < this.frame && (!oldest || c.lastUsed < oldest.lastUsed)) oldest = c;
     if (oldest) {
       oldest.canvas.width = 0;
       oldest.emissive.width = 0;

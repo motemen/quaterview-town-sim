@@ -147,7 +147,8 @@ function processJump(): void {
     world.stationsChanged = false;
     trains.refresh(world);
   }
-  if (jumpQueue === 0 || jumpFrames % 12 === 0) {
+  // ジャンプ中の画面更新は 2 秒に 1 回程度でよい
+  if (jumpQueue === 0 || jumpFrames % 30 === 0) {
     layer.detectChanges();
     minimap.refresh();
   }
@@ -169,7 +170,7 @@ window.addEventListener("resize", resize);
 resize();
 {
   const st = world.stations[0];
-  cam.zoom = window.innerWidth > 700 ? 4 : 3;
+  cam.zoom = 1;
   cam.centerOnTile(st ? st.x : world.w / 2, st ? st.y : world.h / 2);
   // デバッグ用: ?at=x,y でカメラの中心を指定
   const at = new URLSearchParams(location.search).get("at");
@@ -315,7 +316,8 @@ function frame(now: number): void {
   if (jumpQueue > 0) processJump();
   else advance(world, dt, speed);
   applySeason();
-  if (world.lastHour !== lastHour) {
+  // 変化の検出と描き直しは 1 時間ごと。倍速のときは速度ぶん間隔を空けて、実時間での更新頻度を変えない
+  if (world.lastHour - lastHour >= Math.max(1, speed)) {
     lastHour = world.lastHour;
     layer.detectChanges();
     minimap.refresh();
