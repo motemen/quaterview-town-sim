@@ -220,7 +220,7 @@ export class TilePainter {
       }
       case Kind.Station: {
         const st = w.stations.find((s) => s.x === x && s.y === y);
-        const sp = stationSprite(st ? st.plazaDir : 2, this.season, railConnections(w, x, y));
+        const sp = stationSprite(st ? st.plazaDir : 2, this.season, railConnections(w, x, y), w.bLevel[i]);
         this.blit(sp.base, px, py);
         if (sp.emissive) this.blitEmissive(sp.emissive, px, py);
         if (this.illumination) {
@@ -356,6 +356,7 @@ const PARTIAL_MAX = 24;
 export function tileSpriteTop(kind: number, level: number, style: number): number {
   if (kind === Kind.Building) {
     if (level === LEVEL_BIG_TOWER) return CHUNK_TOP;
+    if (level === 6) return 200; // 2x2 のタワー
     if (level >= 5) return 150;
     // 階の高さ 6px + 屋根・看板・クレーンなどの余白
     return buildingFloors(level, style) * 6 + 64;

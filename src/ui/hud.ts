@@ -154,6 +154,7 @@ export class Hud {
       else if (state === BState.Abandoned) s += " 空き家";
       else s += ` 築${world.bAge[i]}日 ${LEVEL_CAPACITY[world.bLevel[i]]}人`;
     }
+    if (k === Kind.Station) s += ["", " (駅舎あり)", " (橋上駅舎)"][world.bLevel[i]] ?? "";
     if (k === Kind.Farm) s = `(${x},${y}) ${["田んぼ", "畑", "花畑", "果樹園"][world.bStyle[i] & 3]}`;
     if (k === Kind.Road && world.water[i]) s = `(${x},${y}) 橋`;
     if (k === Kind.Rail && world.water[i]) s = `(${x},${y}) 鉄橋`;

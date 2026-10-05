@@ -90,7 +90,36 @@ function dailyTasks(
   dailyAging(w);
   computePopulation(w);
   maybeStartLandmark(w);
+  growStations(w);
   rebuildBuildingList(w);
+}
+
+/** 駅舎の大きさ (駅タイルの bLevel に入れる): 0=ホームだけ 1=駅舎 2=橋上駅舎 */
+export const STATION_SIZE_BUILDINGS = [0, 30, 80] as const;
+
+/** 周囲の建物が増えた駅の駅舎を大きくする。1 日 1 回。 */
+function growStations(w: World): void {
+  for (const st of w.stations) {
+    const i = idx(w, st.x, st.y);
+    if (w.kind[i] !== Kind.Station) continue;
+    const cur = w.bLevel[i];
+    if (cur >= 2) continue;
+    let count = 0;
+    for (let dy = -7; dy <= 7; dy++) {
+      for (let dx = -7; dx <= 7; dx++) {
+        const x = st.x + dx;
+        const y = st.y + dy;
+        if (!inBounds(w, x, y)) continue;
+        const j = idx(w, x, y);
+        if (w.kind[j] === Kind.Building && w.bState[j] === BState.Built) count++;
+      }
+    }
+    let size = 0;
+    for (let k = 1; k < STATION_SIZE_BUILDINGS.length; k++) if (count >= STATION_SIZE_BUILDINGS[k]) size = k;
+    if (size <= cur) continue;
+    w.bLevel[i] = cur + 1;
+    w.events.push(cur + 1 === 2 ? `${st.name ?? ""}駅が橋上駅舎に建て替えられました` : `${st.name ?? ""}駅に駅舎ができました`);
+  }
 }
 
 export function computeLandValue(w: World, totalDays: number): void {
@@ -814,6 +843,17 @@ function growBuildings(
       }
     }
     if (roadDist === 0) {
+      // 道路から 2 マス (間に 1 マス挟む) なら、家だけがまれに建つ
+      for (const [ox, oy] of OFFSETS_DIST2) {
+        const nx = x + ox;
+        const ny = y + oy;
+        if (inBounds(w, nx, ny) && w.kind[idx(w, nx, ny)] === Kind.Road) {
+          roadDist = 3;
+          break;
+        }
+      }
+    }
+    if (roadDist === 0) {
       if (k === Kind.Lot && w.lotTimer[i] > 60 && w.rng.chance((0.1 * P) / 24))
         w.kind[i] = Kind.Grass;
       // ぽつんと一軒家: 田畑や農道のそばの野原に、ごくまれに
@@ -826,7 +866,7 @@ function growBuildings(
           const nk = w.kind[idx(w, nx, ny)];
           if (nk === Kind.Farm || nk === Kind.FarmPath) rural = true;
         }
-        if (rural && w.rng.chance((0.00012 * P) / 24)) {
+        if (rural && w.rng.chance((0.0003 * P) / 24)) {
           startConstruction(w, i, 0);
         }
       }
@@ -835,12 +875,13 @@ function growBuildings(
     const v = w.value[i];
     let pDay = Math.pow(v / 100, 2.2) * 0.5;
     if (roadDist === 2) pDay *= 0.4;
+    if (roadDist === 3) pDay *= 0.12;
     if (k === Kind.Lot) pDay *= 3;
     if (k === Kind.Forest) pDay *= 0.6;
     if (k === Kind.Farm) pDay *= 0.5;
     if (v < 12) pDay = 0;
     if (w.rng.chance((pDay * P) / 24)) {
-      startConstruction(w, i, v);
+      startConstruction(w, i, v, roadDist === 3 ? 1 : 4);
     } else if (
       k === Kind.Lot &&
       w.lotTimer[i] > 90 &&
@@ -851,8 +892,20 @@ function growBuildings(
   }
 }
 
-function startConstruction(w: World, i: number, v: number): void {
-  let level = levelForValue(v);
+/** 道路から 2 マス離れた位置 (マンハッタン距離 2) */
+const OFFSETS_DIST2: readonly (readonly [number, number])[] = [
+  [2, 0],
+  [-2, 0],
+  [0, 2],
+  [0, -2],
+  [1, 1],
+  [1, -1],
+  [-1, 1],
+  [-1, -1],
+];
+
+function startConstruction(w: World, i: number, v: number, maxLevel = 4): void {
+  let level = Math.min(maxLevel, levelForValue(v));
   if (level > 1 && w.rng.chance(0.4)) level--;
   if (level > 1 && w.rng.chance(0.25)) level--;
   // ランドマークの周りは低い建物にして、眺めを隠さない
@@ -890,6 +943,54 @@ function startConstruction(w: World, i: number, v: number): void {
   w.lights[i] = w.rng.int(16);
 }
 
+/**
+ * 左上 (x0,y0) の 2x2 区画が確保できるか。except のタイルは調べない。
+ * 低い建物 (レベル maxLevel 以下、築 30 日以上、建設中でない) は取り壊してよいものとして扱う。
+ */
+export function bigSiteFree(w: World, x0: number, y0: number, except = -1, maxLevel = 4): boolean {
+  if (x0 < 0 || y0 < 0 || x0 + 1 >= w.w || y0 + 1 >= w.h) return false;
+  for (let dy = 0; dy <= 1; dy++) {
+    for (let dx = 0; dx <= 1; dx++) {
+      const j = idx(w, x0 + dx, y0 + dy);
+      if (j === except) continue;
+      const k = w.kind[j];
+      const low =
+        k === Kind.Building &&
+        w.bLevel[j] <= maxLevel &&
+        w.bState[j] !== BState.Constructing &&
+        w.bAge[j] > 30;
+      if (!(isBuildableGround(k) || low) || w.water[j] || !isFlat(w, x0 + dx, y0 + dy)) return false;
+    }
+  }
+  return true;
+}
+
+/** 左上 (x0,y0) の 2x2 区画に建物 (level) を建て始める。アンカーは右下のタイル。 */
+export function claimBigSite(w: World, x0: number, y0: number, level: number, style: number): number {
+  const anchor = idx(w, x0 + 1, y0 + 1);
+  for (let dy = 0; dy <= 1; dy++) {
+    for (let dx = 0; dx <= 1; dx++) {
+      const j = idx(w, x0 + dx, y0 + dy);
+      if (j === anchor) continue;
+      w.kind[j] = Kind.BuildingPart;
+      w.bStyle[j] = (1 - dx) | ((1 - dy) << 1);
+      w.bLevel[j] = 0;
+      w.bState[j] = BState.None;
+      w.lotTimer[j] = 0;
+    }
+  }
+  w.kind[anchor] = Kind.Building;
+  w.cache.buildings.push(anchor);
+  w.bLevel[anchor] = level;
+  w.bStyle[anchor] = style;
+  w.bState[anchor] = BState.Constructing;
+  w.bProgress[anchor] = 0;
+  w.bAge[anchor] = 0;
+  w.lotTimer[anchor] = 0;
+  w.lights[anchor] = w.rng.int(16);
+  return anchor;
+}
+
 /** (x,y) を含む 2x2 の区画が確保できれば、2x2 タワーにする */
 function tryBigTower(w: World, i: number): void {
   const x = i % w.w;
@@ -902,51 +1003,8 @@ function tryBigTower(w: World, i: number): void {
   ]) {
     const x0 = x + ox;
     const y0 = y + oy;
-    if (x0 < 0 || y0 < 0 || x0 + 1 >= w.w || y0 + 1 >= w.h) continue;
-    let okAll = true;
-    for (let dy = 0; dy <= 1 && okAll; dy++) {
-      for (let dx = 0; dx <= 1; dx++) {
-        const j = idx(w, x0 + dx, y0 + dy);
-        if (j === i) continue;
-        const k = w.kind[j];
-        const low =
-          k === Kind.Building &&
-          w.bLevel[j] <= 4 &&
-          w.bState[j] !== BState.Constructing &&
-          w.bAge[j] > 30;
-        if (
-          !(isBuildableGround(k) || low) ||
-          w.water[j] ||
-          !isFlat(w, x0 + dx, y0 + dy)
-        ) {
-          okAll = false;
-          break;
-        }
-      }
-    }
-    if (!okAll) continue;
-    const anchor = idx(w, x0 + 1, y0 + 1);
-    const style = w.bStyle[i];
-    for (let dy = 0; dy <= 1; dy++) {
-      for (let dx = 0; dx <= 1; dx++) {
-        const j = idx(w, x0 + dx, y0 + dy);
-        if (j === anchor) continue;
-        w.kind[j] = Kind.BuildingPart;
-        w.bStyle[j] = (1 - dx) | ((1 - dy) << 1);
-        w.bLevel[j] = 0;
-        w.bState[j] = BState.None;
-        w.lotTimer[j] = 0;
-      }
-    }
-    w.kind[anchor] = Kind.Building;
-    w.cache.buildings.push(anchor);
-    w.bLevel[anchor] = LEVEL_BIG_TOWER;
-    w.bStyle[anchor] = style;
-    w.bState[anchor] = BState.Constructing;
-    w.bProgress[anchor] = 0;
-    w.bAge[anchor] = 0;
-    w.lotTimer[anchor] = 0;
-    w.lights[anchor] = w.rng.int(16);
+    if (!bigSiteFree(w, x0, y0, i)) continue;
+    claimBigSite(w, x0, y0, LEVEL_BIG_TOWER, w.bStyle[i]);
     if (!(w.flags & 32)) {
       w.flags |= 32;
       w.events.push("超高層タワーの建設が始まりました");

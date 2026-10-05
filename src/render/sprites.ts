@@ -250,27 +250,94 @@ export function groundSprite(kind: GroundKind, rel: readonly [number, number, nu
 // ---------------------------------------------------------------------------
 // 木
 
-/** 木。基部中央を原点にする (ox=4, oy=11)。 */
+/** 木の形: 0=丸い広葉樹 1=針葉樹 (常緑) 2=細長い木 (ポプラ) 3=横に広い木 */
+export function treeShape(variant: number): number {
+  return [0, 0, 1, 2, 0, 3, 1, 0][((variant % 8) + 8) % 8];
+}
+
+/** 常緑樹か (桜・紅葉にならない) */
+export function treeIsEvergreen(variant: number): boolean {
+  return treeShape(variant) === 1;
+}
+
+const EVERGREEN: RGB = [36, 92, 60];
+const EVERGREEN_LIGHT: RGB = [64, 128, 84];
+const EVERGREEN_DARK: RGB = [24, 68, 44];
+
+/**
+ * 木。基部中央が原点 (ox=5, oy=15)。tint: 0=緑 1=桜 2=紅葉 3=雪。
+ * 形は variant で決まり、針葉樹は季節で色を変えない (雪だけかぶる)。
+ */
 export function treeSprite(variant: number, tint = 0): Sprite {
-  const key = `t:${variant}:${tint}`;
+  const shape = treeShape(variant);
+  if (shape === 1 && tint !== 3) tint = 0;
+  const key = `t:${shape}:${variant % 3}:${tint}`;
   return cache.get(key, () => {
-    const r = new Raster(9, 12);
+    const r = new Raster(11, 16);
     const big = variant % 3 === 0;
     const canopy = tint === 1 ? ([240, 184, 200] as RGB) : tint === 2 ? ([208, 128, 56] as RGB) : tint === 3 ? ([236, 240, 246] as RGB) : PAL.canopy;
     const canopyLight = tint === 0 ? PAL.canopyLight : tint === 3 ? ([252, 252, 255] as RGB) : shade(canopy, 1.12);
     const canopyDark = tint === 0 ? PAL.canopyDark : tint === 3 ? ([120, 140, 120] as RGB) : shade(canopy, 0.78);
-    r.vline(4, 8, 11, PAL.trunk);
-    const rad = big ? 3.6 : 3;
-    const cy = big ? 5 : 6;
-    r.disc(4.5, cy, rad, canopy);
-    r.disc(3.5, cy - 1, rad * 0.6, canopyLight);
-    // 下側の影
-    for (let x = 0; x < 9; x++) {
-      for (let y = 0; y < 12; y++) {
-        if (r.alpha(x, y) && y > cy + 1 && hash2(variant, x, y) < 0.6) r.set(x, y, canopyDark);
+    const shadeBelow = (cy: number, dark: RGB) => {
+      for (let x = 0; x < r.w; x++) {
+        for (let y = 0; y < r.h; y++) {
+          if (r.alpha(x, y) && y > cy + 1 && y < 12 && hash2(variant, x, y) < 0.6) r.set(x, y, dark);
+        }
       }
+    };
+    if (shape === 1) {
+      // 針葉樹: 三角形。左側を明るく、雪は各段の左上に
+      const top = big ? 1 : 3;
+      const bottom = 12;
+      r.vline(5, 12, 15, PAL.trunk);
+      for (let y = top; y <= bottom; y++) {
+        const t = (y - top) / (bottom - top);
+        const hw = Math.round(t * (big ? 4 : 3.4));
+        for (let x = 5 - hw; x <= 5 + hw; x++) r.set(x, y, x < 5 ? EVERGREEN_LIGHT : x === 5 ? EVERGREEN : EVERGREEN_DARK);
+        // 段の縁 (枝先) は少し暗く
+        if (hw > 0 && (y - top) % 3 === 2) {
+          r.set(5 - hw, y, EVERGREEN_DARK);
+          r.set(5 + hw, y, EVERGREEN_DARK);
+        }
+        if (tint === 3 && hw > 0 && (y - top) % 3 === 0) {
+          for (let x = 5 - hw; x <= 5 + hw - 1; x++) if (hash2(variant, x, y) < 0.7) r.set(x, y, canopy);
+        }
+      }
+      if (tint === 3) r.set(5, top, canopy);
+      return toSprite(r, 5, 15);
     }
-    return toSprite(r, 4, 11);
+    if (shape === 2) {
+      // ポプラ: 細長い楕円
+      r.vline(5, 12, 15, PAL.trunk);
+      const top = big ? 0 : 2;
+      const bottom = 12;
+      for (let y = top; y <= bottom; y++) {
+        const t = (y - top) / (bottom - top);
+        const hw = Math.sin(t * Math.PI) * 2.3;
+        for (let x = Math.round(5 - hw); x <= Math.round(5 + hw); x++) r.set(x, y, x <= 4 && y < 8 ? canopyLight : canopy);
+      }
+      shadeBelow(7, canopyDark);
+      return toSprite(r, 5, 15);
+    }
+    if (shape === 3) {
+      // 横に広い木: 低い幹に丸を 3 つ重ねる
+      r.vline(5, 11, 15, PAL.trunk);
+      r.vline(4, 13, 15, PAL.trunk);
+      r.disc(3, 9.5, 3, canopy);
+      r.disc(8, 9.5, 3, canopy);
+      r.disc(5.5, 7.5, 3.4, canopy);
+      r.disc(4.5, 6.5, 2, canopyLight);
+      shadeBelow(8, canopyDark);
+      return toSprite(r, 5, 15);
+    }
+    // 丸い広葉樹 (従来)
+    r.vline(5, 12, 15, PAL.trunk);
+    const rad = big ? 3.6 : 3;
+    const cy = big ? 9 : 10;
+    r.disc(5.5, cy, rad, canopy);
+    r.disc(4.5, cy - 1, rad * 0.6, canopyLight);
+    shadeBelow(cy, canopyDark);
+    return toSprite(r, 5, 15);
   });
 }
 
@@ -639,10 +706,13 @@ export function crossingSprite(railMask: number, roadMask: number, season: Seaso
   });
 }
 
-/** 駅: 線路 + ホーム + 屋根。スプライトは 32x26 (oy=10)。plazaDir が 1/3 (東/西) のときは南北の線路。 */
-export function stationSprite(plazaDir: number, season: SeasonTint = 0, railMask = 0): { base: Sprite; emissive: Sprite | null } {
-  return pairCache.get(`st:${plazaDir}:${season}:${railMask}`, () => {
-    const DY = 10;
+/**
+ * 駅: 線路 + ホーム + 屋根。size で駅舎が大きくなる (0=ホームだけ 1=駅舎 2=橋上駅舎)。
+ * plazaDir が 1/3 (東/西) のときは南北の線路。
+ */
+export function stationSprite(plazaDir: number, season: SeasonTint = 0, railMask = 0, size = 0): { base: Sprite; emissive: Sprite | null } {
+  return pairCache.get(`st:${plazaDir}:${season}:${railMask}:${size}`, () => {
+    const DY = size >= 2 ? 34 : size === 1 ? 22 : 10;
     const r = new Raster(TILE_W, TILE_H + DY);
     const e = new Raster(TILE_W, TILE_H + DY);
     const vertical = plazaDir === 1 || plazaDir === 3;
@@ -654,6 +724,12 @@ export function stationSprite(plazaDir: number, season: SeasonTint = 0, railMask
       if (plazaDir === 1) return [v, u];
       return [v, 1 - u];
     };
+    const fromLocal = (along: number, across: number): [number, number] => {
+      if (plazaDir === 2) return [along, across];
+      if (plazaDir === 0) return [along, 1 - across];
+      if (plazaDir === 1) return [across, along];
+      return [1 - across, along];
+    };
     forEachDiamondPixel((x, y, u, v) => {
       const [along, across] = toLocal(u, v);
       if (across >= 0.66 && along > 0.02 && along < 0.98) {
@@ -661,30 +737,101 @@ export function stationSprite(plazaDir: number, season: SeasonTint = 0, railMask
       }
     });
     const ROOF = 9;
-    forEachDiamondPixel((x, y, u, v) => {
-      const [along, across] = toLocal(u, v);
-      if (across >= 0.7 && across <= 0.96 && along >= 0.1 && along <= 0.9) {
-        const edge = across > 0.94 || across < 0.72 || along < 0.12 || along > 0.88;
-        r.set(x, y + DY - ROOF, edge ? shade(PAL.roofStation, 0.8) : PAL.roofStation);
+    const wall: RGB = [226, 222, 208];
+    const wallDark = shade(wall, 0.72);
+    const stationRoof: RGB = size >= 2 ? [120, 132, 160] : [150, 92, 76];
+    /** ローカル座標の矩形を高さ h の箱にする (uv → ピクセル)。足元の行は across/along で決まる */
+    const localBox = (a0: number, a1: number, c0: number, c1: number, lift: number, h: number, roof: RGB, windows: boolean) => {
+      const cells: [number, number, number, number][] = [];
+      forEachDiamondPixel((x, y, u, v) => {
+        const [along, across] = toLocal(u, v);
+        if (along >= a0 && along <= a1 && across >= c0 && across <= c1) cells.push([x, y + DY - lift, along, across]);
+      });
+      // 画面の下側の縁にある画素だけ壁になる: 同じ x で最大の y
+      const bottomAt = new Map<number, number>();
+      for (const [x, y] of cells) bottomAt.set(x, Math.max(bottomAt.get(x) ?? -1, y));
+      let minX = 99;
+      let maxX = -1;
+      for (const [x] of cells) {
+        minX = Math.min(minX, x);
+        maxX = Math.max(maxX, x);
       }
-    });
-    // 柱と明かり: ローカル座標 → uv
-    const fromLocal = (along: number, across: number): [number, number] => {
-      if (plazaDir === 2) return [along, across];
-      if (plazaDir === 0) return [along, 1 - across];
-      if (plazaDir === 1) return [across, along];
-      return [1 - across, along];
+      const midX = (minX + maxX) / 2;
+      for (const [x, yb] of bottomAt) {
+        const left = x < midX;
+        for (let k = 1; k <= h; k++) {
+          const y = yb - k + 1;
+          let c: RGB = left ? wall : wallDark;
+          const colInWall = left ? x - minX : maxX - x;
+          if (windows && k >= 3 && k <= h - 3 && colInWall % 3 === 1 && colInWall > 0) {
+            c = shade(PAL.windowDay, left ? 1 : 0.85);
+            e.set(x, y, PAL.windowLitWarm);
+          }
+          r.set(x, y, c);
+        }
+      }
+      for (const [x, y] of cells) {
+        const yr = y - h;
+        const edge = !cells.some(([cx, cy]) => cx === x && cy === y + 1) || x === minX || x === maxX;
+        r.set(x, yr, edge ? shade(roof, 0.8) : roof);
+      }
+      // 高架の柱
+      if (lift > 0) {
+        for (const x of [minX + 1, maxX - 1]) {
+          const yb = bottomAt.get(x) ?? 0;
+          for (let y = yb + 1; y <= yb + lift; y++) r.set(x, y, PAL.concreteDark);
+        }
+      }
     };
-    for (const along of [0.18, 0.5, 0.82]) {
-      const [u, v] = fromLocal(along, 0.9);
+    if (size === 0) {
+      // ホームの屋根
+      forEachDiamondPixel((x, y, u, v) => {
+        const [along, across] = toLocal(u, v);
+        if (across >= 0.7 && across <= 0.96 && along >= 0.1 && along <= 0.9) {
+          const edge = across > 0.94 || across < 0.72 || along < 0.12 || along > 0.88;
+          r.set(x, y + DY - ROOF, edge ? shade(PAL.roofStation, 0.8) : PAL.roofStation);
+        }
+      });
+      for (const along of [0.18, 0.5, 0.82]) {
+        const [u, v] = fromLocal(along, 0.9);
+        const [px, py] = uvToPixel(u, v);
+        r.vline(Math.floor(px), Math.floor(py) + DY - ROOF + 1, Math.floor(py) + DY - 1, PAL.concreteDark);
+      }
+    } else {
+      // 駅舎: 広場側の縁に建つ 1 階建て。ホームの屋根はその手前
+      forEachDiamondPixel((x, y, u, v) => {
+        const [along, across] = toLocal(u, v);
+        if (across >= 0.68 && across <= 0.8 && along >= 0.1 && along <= 0.9) {
+          const edge = across > 0.78 || across < 0.7 || along < 0.12 || along > 0.88;
+          r.set(x, y + DY - 7, edge ? shade(PAL.roofStation, 0.8) : PAL.roofStation);
+        }
+      });
+      localBox(0.1, 0.9, 0.8, 0.98, 0, 11, stationRoof, true);
+      // 入口の明かり
+      const [u, v] = fromLocal(0.5, 0.98);
       const [px, py] = uvToPixel(u, v);
-      r.vline(Math.floor(px), Math.floor(py) + DY - ROOF + 1, Math.floor(py) + DY - 1, PAL.concreteDark);
+      e.set(Math.floor(px), Math.floor(py) + DY - 8, PAL.lamp);
+      e.set(Math.floor(px) + 1, Math.floor(py) + DY - 8, PAL.lamp);
     }
+    if (size >= 2) {
+      // 橋上駅舎: 線路をまたぐ高架のコンコース
+      localBox(0.3, 0.7, 0.05, 0.95, 13, 10, stationRoof, true);
+      // 屋上の看板
+      const [u, v] = fromLocal(0.5, 0.5);
+      const [px, py] = uvToPixel(u, v);
+      const sx = Math.floor(px) - 3;
+      const sy = Math.floor(py) + DY - 13 - 10 - 4;
+      r.fillRect(sx, sy, 7, 3, [240, 240, 232]);
+      r.fillRect(sx + 1, sy + 1, 5, 1, [60, 100, 180]);
+      e.fillRect(sx, sy, 7, 3, [255, 255, 240]);
+      e.fillRect(sx + 1, sy + 1, 5, 1, [120, 170, 255]);
+    }
+    // ホームの明かり
     for (const along of [0.32, 0.68]) {
-      const [u, v] = fromLocal(along, 0.82);
+      const [u, v] = fromLocal(along, 0.74);
       const [px, py] = uvToPixel(u, v);
       const lx = Math.floor(px);
-      const ly = Math.floor(py) + DY - ROOF + 2;
+      const ly = Math.floor(py) + DY - (size === 0 ? ROOF - 2 : 5);
       e.set(lx, ly, PAL.lamp);
       e.set(lx + 1, ly, PAL.lamp);
       for (let yy = 1; yy <= 5; yy++) {
@@ -762,6 +909,7 @@ export function buildingSprite(spec: BuildingSpec): { base: Sprite; emissive: Sp
   return pairCache.get(key, () => {
     if (spec.level === 1) return houseSprite(spec);
     if (spec.level === 8) return bigTowerSprite(spec);
+    if (spec.level === 6) return bigLandmarkTowerSprite(spec);
     if (spec.level >= 5) return landmarkSprite(spec);
     if (isMixedUse(spec.level, spec.style)) return mixedUseSprite(spec);
     return boxBuildingSprite(spec);
@@ -1257,9 +1405,60 @@ function landmarkSprite(spec: BuildingSpec): { base: Sprite; emissive: Sprite | 
     return packBuilding(spec, r, e, 0, baseTop, true);
   }
   if (spec.level === 5) drawHall(r, e, baseTop, spec);
-  else if (spec.level === 6) drawTower(r, e, baseTop);
   else drawWheel(r, e, baseTop, spec);
   return packBuilding(spec, r, e, 0, baseTop, true);
+}
+
+/**
+ * 2x2 のタワー (ランドマーク、レベル 6)。bigTowerSprite と同じく幅 64 の菱形を底面とし、
+ * アンカー (右下のタイル) を基準に描く。ox = 16, oy = 高さ - 32 + 8。
+ */
+function bigLandmarkTowerSprite(spec: BuildingSpec): { base: Sprite; emissive: Sprite | null } {
+  const W = 64;
+  const CELL = 32;
+  const CX = 32;
+  const CY = 16;
+  const TOWER_H = 150;
+  const H = CELL + TOWER_H + 24;
+  const baseTop = H - CELL;
+  const r = new Raster(W, H);
+  const e = new Raster(W, H);
+  const constructing = spec.state === BState.Constructing;
+  const rows = (x: number): [number, number] => {
+    const d = x < CX ? x : W - 1 - x;
+    const k = Math.floor(d / 2);
+    return [CY - 1 - k, CY + k];
+  };
+  // 足元: 公園のような広場 (縁は植え込み)
+  for (let x = 0; x < W; x++) {
+    const [yt, yb] = rows(x);
+    for (let y = yt; y <= yb; y++) {
+      const edge = y === yt || y === yb || x < 2 || x > W - 3;
+      const n = hash2(spec.style, x, y);
+      r.set(x, y + baseTop, constructing ? (n < 0.12 ? PAL.concreteDark : n < 0.2 ? PAL.sand : PAL.dirt) : edge ? PAL.canopyDark : n < 0.06 ? PAL.concreteDark : PAL.concrete);
+    }
+  }
+  if (constructing) {
+    // 工事現場: 柵と 2 基のクレーン
+    for (const mx of [CX - 12, CX + 12]) {
+      const [, ybR] = rows(mx);
+      const base = ybR + baseTop - 4;
+      const top = base - 22;
+      for (let y = top; y <= base; y++) r.set(mx, y, (y - top) % 2 === 0 ? PAL.crane : PAL.craneDark);
+      r.hline(mx - 12, mx + 8, top, PAL.crane);
+      r.vline(mx + 6, top + 1, top + 7, PAL.railDark);
+      r.set(mx, top - 1, PAL.redLight);
+      e.set(mx, top - 1, PAL.redLight);
+    }
+    // 基礎
+    for (let x = CX - 20; x <= CX + 20; x += 8) {
+      const [, ybR] = rows(x);
+      r.fillRect(x - 1, ybR + baseTop - 6, 3, 6, PAL.concreteDark);
+    }
+    return packBuilding(spec, r, e, 16, baseTop + 8, true);
+  }
+  drawTower(r, e, baseTop, { cx: CX, height: TOWER_H, maxHw: 24, bottom: baseTop + CY + 4 });
+  return packBuilding(spec, r, e, 16, baseTop + 8, true);
 }
 
 function drawHall(r: Raster, e: Raster, baseTop: number, spec: BuildingSpec): void {
@@ -1312,19 +1511,16 @@ function drawHall(r: Raster, e: Raster, baseTop: number, spec: BuildingSpec): vo
   r.fillRect(fx + 1, fy - 7, 3, 2, [220, 60, 50]);
 }
 
-function drawTower(r: Raster, e: Raster, baseTop: number): void {
-  // 土台
-  forEachDiamondPixel((x, y, u, v) => {
-    if (u > 0.1 && u < 0.9 && v > 0.1 && v < 0.9) r.set(x, y + baseTop, hash2(5, x, y) < 0.08 ? PAL.concreteDark : PAL.concrete);
-  });
+/** 鉄塔 (タワー)。cx を中心に、bottom から height だけ上へ。脚の広がりは maxHw */
+function drawTower(r: Raster, e: Raster, baseTop: number, geo: { cx: number; height: number; maxHw: number; bottom: number }): void {
+  void baseTop;
   const orange: RGB = [232, 104, 48];
   const dark: RGB = [168, 72, 32];
-  const height = 98;
-  const bottom = baseTop + HALF_H + 2;
+  const { cx: HALF_W, height, maxHw, bottom } = geo;
   const top = bottom - height;
   for (let y = top; y <= bottom; y++) {
     const t = (y - top) / height;
-    const hw = 1 + t * t * 13;
+    const hw = 1 + t * t * maxHw;
     const lx = Math.round(HALF_W - hw);
     const rx = Math.round(HALF_W + hw);
     r.set(lx, y, orange);
@@ -1342,25 +1538,34 @@ function drawTower(r: Raster, e: Raster, baseTop: number): void {
       r.set(qx, y, orange);
     }
   }
-  // 展望台
-  const deckY = top + Math.round(height * 0.45);
-  const dhw = Math.round(1 + 0.45 * 0.45 * 13) + 3;
-  r.fillRect(HALF_W - dhw, deckY - 2, dhw * 2 + 1, 4, [236, 236, 228]);
-  r.hline(HALF_W - dhw, HALF_W + dhw, deckY + 2, [160, 160, 152]);
-  for (let x = HALF_W - dhw + 1; x < HALF_W + dhw; x += 2) {
-    r.set(x, deckY, PAL.windowDay);
-    e.set(x, deckY, PAL.windowLit);
+  // 展望台 (大展望台と、その上の特別展望台)
+  const decks = maxHw > 16 ? [0.45, 0.22] : [0.45];
+  for (const [n, at] of decks.entries()) {
+    const deckY = top + Math.round(height * at);
+    const dhw = Math.round(1 + at * at * maxHw) + (n === 0 ? 4 : 2);
+    const dh = n === 0 && maxHw > 16 ? 6 : 4;
+    r.fillRect(HALF_W - dhw, deckY - 2, dhw * 2 + 1, dh, [236, 236, 228]);
+    r.hline(HALF_W - dhw, HALF_W + dhw, deckY - 2 + dh, [160, 160, 152]);
+    for (let x = HALF_W - dhw + 1; x < HALF_W + dhw; x += 2) {
+      r.set(x, deckY, PAL.windowDay);
+      e.set(x, deckY, PAL.windowLit);
+      if (dh > 4) {
+        r.set(x, deckY + 2, PAL.windowDay);
+        e.set(x, deckY + 2, PAL.windowLit);
+      }
+    }
+    e.set(HALF_W - 1, deckY - 3, PAL.redLight);
+    e.set(HALF_W + 1, deckY - 3, PAL.redLight);
   }
   // アンテナと灯
-  r.vline(HALF_W, top - 6, top - 1, PAL.railDark);
-  r.set(HALF_W, top - 7, PAL.redLight);
-  e.set(HALF_W, top - 7, PAL.redLight);
-  e.set(HALF_W - 1, deckY - 3, PAL.redLight);
-  e.set(HALF_W + 1, deckY - 3, PAL.redLight);
+  const ant = maxHw > 16 ? 12 : 6;
+  r.vline(HALF_W, top - ant, top - 1, PAL.railDark);
+  r.set(HALF_W, top - ant - 1, PAL.redLight);
+  e.set(HALF_W, top - ant - 1, PAL.redLight);
   // 脚の灯り
-  for (const y of [bottom - 8, bottom - 20, bottom - 32, bottom - 44, bottom - 56, bottom - 68, bottom - 80]) {
+  for (let y = bottom - 8; y > top + 8; y -= 12) {
     const t = (y - top) / height;
-    const hw = 1 + t * t * 13;
+    const hw = 1 + t * t * maxHw;
     e.set(Math.round(HALF_W - hw), y, [255, 200, 120]);
     e.set(Math.round(HALF_W + hw), y, [255, 200, 120]);
   }

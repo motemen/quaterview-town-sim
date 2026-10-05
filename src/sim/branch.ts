@@ -33,9 +33,8 @@ export interface Branch {
   pendingName?: string;
 }
 
-const MAX_EXTENSIONS = 2;
-
-const MAX_BRANCHES = 4;
+/** 支線の本数の上限 (駅数の半分まで)。延伸はマップの端まで何度でも */
+const MAX_BRANCHES = 8;
 const TILES_PER_DAY = 2;
 
 /** 10 日に 1 回: 条件が揃えば新しい支線を計画する (既存の支線の延伸を優先) */
@@ -44,11 +43,10 @@ export function maybePlanBranch(w: World): boolean {
   if (maybeExtendBranch(w)) return true;
   const limit = Math.min(MAX_BRANCHES, Math.max(1, Math.floor(w.stations.length / 2)));
   if (w.branches.length >= limit) return false;
-  // 候補の駅: 本線上で、周囲に建物が多く、まだ支線のない駅
-  const used = new Set(w.branches.map((b) => b.from));
+  // 候補の駅: 本線上で、周囲に建物が多く、その向きにまだ支線のない駅
+  const used = new Set(w.branches.map((b) => `${b.from}:${Math.sign(b.tiles[b.tiles.length - 1][1] - w.stations[b.from].y)}`));
   let best: { from: number; tiles: [number, number][]; plazaDir: number; score: number } | null = null;
   for (let si = 0; si < w.stations.length; si++) {
-    if (used.has(si)) continue;
     const st = w.stations[si];
     if (st.plazaDir !== 0 && st.plazaDir !== 2) continue; // 本線の駅だけ
     let buildings = 0;
@@ -61,6 +59,7 @@ export function maybePlanBranch(w: World): boolean {
     }
     if (buildings < 12) continue;
     for (const dir of [-1, 1]) {
+      if (used.has(`${si}:${dir}`)) continue;
       const plan = planPath(w, st.x, st.y, dir);
       if (!plan) continue;
       const score = buildings + plan.tiles.length * 0.5 + w.rng.next() * 5;
@@ -77,7 +76,7 @@ export function maybePlanBranch(w: World): boolean {
 /** 開通済みの支線の終点がにぎわってきたら、同じ向きにさらに伸ばす */
 function maybeExtendBranch(w: World): boolean {
   for (const b of w.branches) {
-    if (!b.done || (b.extensions ?? 0) >= MAX_EXTENSIONS) continue;
+    if (!b.done) continue;
     const [tx, ty] = b.tiles[b.tiles.length - 1];
     let buildings = 0;
     for (let dy = -8; dy <= 8; dy++) {
