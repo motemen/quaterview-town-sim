@@ -35,6 +35,11 @@ export class Hud {
   private static SPEEDS = [0, 1, 4, 16];
   private static SPEED_LABEL: Record<number, string> = { 0: "❚❚", 1: "▶", 4: "▶▶", 16: "▶▶▶" };
   private lastText = "";
+  private recBtn = document.getElementById("btn-rec") as HTMLButtonElement;
+  /** 📷 ボタン / P キー */
+  onScreenshot: () => void = () => {};
+  /** ⏺ ボタン / R キー */
+  onRecord: () => void = () => {};
 
   constructor(
     private onSpeed: (speed: number) => void,
@@ -50,7 +55,10 @@ export class Hud {
       b.addEventListener("click", () => this.onJump(Number(b.dataset.jump)));
     }
     document.getElementById("btn-reset")!.addEventListener("click", onReset);
+    document.getElementById("btn-shot")!.addEventListener("click", () => this.onScreenshot());
+    this.recBtn.addEventListener("click", () => this.onRecord());
     window.addEventListener("keydown", (e) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === " ") {
         e.preventDefault();
         this.setSpeed(this.currentSpeed === 0 ? 1 : 0);
@@ -60,6 +68,8 @@ export class Hud {
       else if (e.key === "j" && !e.repeat) this.onJump(30);
       else if (e.key === "J" && !e.repeat) this.onJump(90);
       else if ((e.key === "l" || e.key === "L") && !e.repeat) this.onJump(360);
+      else if ((e.key === "p" || e.key === "P") && !e.repeat) this.onScreenshot();
+      else if ((e.key === "r" || e.key === "R") && !e.repeat) this.onRecord();
       else if (e.key === "?") this.toggleHelp();
       else if (e.key === "Escape") this.toggleHelp(false);
     });
@@ -102,6 +112,13 @@ export class Hud {
     this.dateEl.textContent = `${c.year}年 ${c.month}月 ${c.day}日 (${SEASON_LABEL[seasonOf(c.month)]})`;
     this.clockEl.textContent = clock;
     this.popEl.textContent = `人口 ${world.population.toLocaleString("ja-JP")}人`;
+  }
+
+  /** 録画中の表示 */
+  setRecording(on: boolean): void {
+    this.recBtn.textContent = on ? "⏹" : "⏺";
+    this.recBtn.title = on ? "録画を止めて保存 (R)" : "録画 (R)";
+    this.recBtn.classList.toggle("rec", on);
   }
 
   toggleHelp(show?: boolean): void {

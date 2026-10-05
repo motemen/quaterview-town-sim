@@ -14,6 +14,7 @@ import { tileOrigin } from "./render/iso";
 import { World } from "./sim/world";
 import { Camera, attachInput } from "./ui/camera";
 import { Hud } from "./ui/hud";
+import { Capture } from "./ui/capture";
 import { Minimap } from "./ui/minimap";
 
 const canvas = document.getElementById("view") as HTMLCanvasElement;
@@ -168,7 +169,7 @@ window.addEventListener("resize", resize);
 resize();
 {
   const st = world.stations[0];
-  cam.zoom = window.innerWidth > 1400 ? 2.5 : window.innerWidth > 700 ? 2 : 1.5;
+  cam.zoom = window.innerWidth > 700 ? 4 : 3;
   cam.centerOnTile(st ? st.x : world.w / 2, st ? st.y : world.h / 2);
   // デバッグ用: ?at=x,y でカメラの中心を指定
   const at = new URLSearchParams(location.search).get("at");
@@ -237,6 +238,29 @@ window.addEventListener("keydown", (e) => {
   if (e.key === "m" || e.key === "M") minimap.toggle();
 });
 document.getElementById("btn-map")!.addEventListener("click", () => minimap.toggle());
+
+// スクリーンショットと録画
+const capture = new Capture(canvas, (recording) => hud.setRecording(recording));
+function captureName(): string {
+  const cal = toCalendar(world.minutes);
+  const town = world.stations[0]?.name ?? "town";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${town}_${cal.year}-${pad(cal.month)}-${pad(cal.day)}_${pad(cal.hour)}${pad(cal.minute)}`;
+}
+hud.onScreenshot = async () => {
+  if (await capture.screenshot(captureName())) hud.flash("スクリーンショットを保存しました");
+  else hud.flash("スクリーンショットを保存できませんでした");
+};
+hud.onRecord = () => {
+  if (capture.recording) {
+    capture.stop();
+    hud.flash("録画を保存しました");
+  } else if (capture.toggleRecording(captureName())) {
+    hud.flash(`録画を始めました (最長 ${Capture.MAX_SECONDS} 秒)`);
+  } else {
+    hud.flash("このブラウザでは録画できません");
+  }
+};
 
 attachInput(canvas, cam, {
   onClick(cx, cy) {

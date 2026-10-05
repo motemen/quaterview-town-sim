@@ -39,6 +39,7 @@ html, body {
   white-space: nowrap;
 }
 #hud .spacer { flex: 1; }
+#hud .status, #hud .buttons { display: contents; }
 #hud button {
   font: inherit;
   color: var(--hud-fg);
@@ -48,6 +49,8 @@ html, body {
   cursor: pointer;
 }
 #hud button.active { background: var(--hud-accent); color: #1a1a2e; border-color: var(--hud-accent); }
+#hud button.rec { background: #c03030; border-color: #ff6060; color: #fff; animation: rec-blink 1s step-end infinite; }
+@keyframes rec-blink { 50% { border-color: #c03030; } }
 #hud button:hover { filter: brightness(1.2); }
 #hud #hud-town { color: var(--hud-accent); }
 #hud #hud-news {
@@ -90,26 +93,47 @@ html, body {
   cursor: pointer;
 }
 
-/* スマホ: HUD を 2 段に折り返し、情報欄とテロップは省スペースに */
+/* スマホ: HUD を 3 段 (状態 / テロップ / ボタン) にし、文字とボタンを大きく */
 @media (max-width: 760px) {
   #hud {
     flex-wrap: wrap;
-    gap: 6px 10px;
-    font-size: 14px;
-    line-height: 22px;
-    padding: 4px 8px;
-    padding-bottom: calc(4px + env(safe-area-inset-bottom));
+    gap: 6px 0;
+    font-size: 18px;
+    line-height: 28px;
+    padding: 6px 10px;
+    padding-bottom: calc(6px + env(safe-area-inset-bottom));
   }
   #hud .spacer { display: none; }
-  #hud #hud-news { max-width: 100%; flex-basis: 100%; font-size: 13px; }
-  #hud button { padding: 0 6px; }
+  #hud .status {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 12px;
+    width: 100%;
+  }
+  #hud #hud-town { width: 100%; }
+  #hud #hud-news { max-width: 100%; flex-basis: 100%; font-size: 16px; }
+  #hud .buttons {
+    display: flex;
+    width: 100%;
+    gap: 6px;
+  }
+  #hud button {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 44px;
+    padding: 0;
+    font-size: 20px;
+    line-height: 44px;
+  }
+  #hud button[data-jump] { font-size: 16px; }
   #minimap {
     width: 160px;
     height: 80px;
     right: 4px;
     top: 4px;
   }
-  #help { width: 90vw; font-size: 14px; line-height: 20px; }
+  #help { width: 90vw; font-size: 15px; line-height: 22px; }
+  #tile-info { max-width: calc(100vw - 180px); font-size: 16px; line-height: 24px; }
 }
 
 /* クリックしたマスの情報 (左上) */
