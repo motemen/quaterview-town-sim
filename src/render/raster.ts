@@ -74,60 +74,127 @@ export interface Sprite {
   /** 描画位置 = タイル原点 - (ox, oy) */
   ox: number;
   oy: number;
+  /** 最後に描画に使われたフレーム (compact で残すかどうかの判断に使う) */
+  used: number;
+}
+
+/** 描画フレームの通し番号。毎フレーム nextSpriteFrame() で進める */
+let spriteFrame = 0;
+export function nextSpriteFrame(): number {
+  return ++spriteFrame;
+}
+export function currentSpriteFrame(): number {
+  return spriteFrame;
+}
+/** スプライトを使ったことを記録する (blit のたびに呼ぶ) */
+export function touch(s: Sprite): void {
+  s.used = spriteFrame;
+}
+
+interface Page {
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+  /** 高さの区分ごとに、いま詰めている棚 */
+  shelves: Map<number, { y: number; x: number }>;
+  /** 次の棚を作る y */
+  nextY: number;
 }
 
 /**
  * スプライトを少数の大きなキャンバス (アトラス) に詰める。
  * 小さなキャンバスを何千も作ると GPU メモリを圧迫してコンテキストを失うため。
+ * 棚は高さの区分 (8px 刻み) ごとに持ち、高さの違うスプライトが混ざって隙間ができないようにする。
  */
 class Atlas {
   static readonly PAGE = 1024;
   static readonly MAX_PAGES = 16;
-  private pages: { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D; shelfY: number; shelfH: number; x: number }[] = [];
-  /** 残りが少ないとき true。次のフレームの頭で全部作り直すべき */
-  nearlyFull = false;
+  private pages: Page[] = [];
+  /** 満杯になって中身を捨てた (キャッシュ中のスプライトが無効になった) */
+  overflowed = false;
+
+  /** 残りが少ない (compact するか、全部作り直すべき) */
+  get nearlyFull(): boolean {
+    return this.overflowed || this.pages.length >= Atlas.MAX_PAGES - 2;
+  }
 
   alloc(w: number, h: number): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D; sx: number; sy: number } {
+    const bucket = Math.ceil(h / 8) * 8;
     for (let attempt = 0; attempt < 2; attempt++) {
       for (const p of this.pages) {
-        // いまの棚に入るか
-        if (h <= p.shelfH && p.x + w <= Atlas.PAGE) {
-          const r = { canvas: p.canvas, ctx: p.ctx, sx: p.x, sy: p.shelfY };
-          p.x += w;
-          return r;
-        }
-        // 新しい棚
-        if (p.shelfY + p.shelfH + h <= Atlas.PAGE) {
-          p.shelfY += p.shelfH;
-          p.shelfH = h;
-          p.x = w;
-          return { canvas: p.canvas, ctx: p.ctx, sx: 0, sy: p.shelfY };
-        }
+        const slot = this.place(p, w, bucket);
+        if (slot) return { canvas: p.canvas, ctx: p.ctx, sx: slot[0], sy: slot[1] };
       }
       if (this.pages.length < Atlas.MAX_PAGES) {
         const canvas = document.createElement("canvas");
         canvas.width = Atlas.PAGE;
         canvas.height = Atlas.PAGE;
         const ctx = canvas.getContext("2d")!;
-        this.pages.push({ canvas, ctx, shelfY: 0, shelfH: h, x: 0 });
-        if (this.pages.length >= Atlas.MAX_PAGES - 2) this.nearlyFull = true;
+        this.pages.push({ canvas, ctx, shelves: new Map(), nextY: 0 });
         continue;
       }
-      // 満杯: 全部捨てて作り直す
+      // 満杯: 全部捨てて作り直す (キャッシュも捨ててもらう必要がある)
       this.reset();
-      this.nearlyFull = true;
+      this.overflowed = true;
     }
     throw new Error("atlas allocation failed");
   }
 
+  private place(p: Page, w: number, bucket: number): [number, number] | null {
+    const shelf = p.shelves.get(bucket);
+    if (shelf && shelf.x + w <= Atlas.PAGE) {
+      const x = shelf.x;
+      shelf.x += w;
+      return [x, shelf.y];
+    }
+    if (p.nextY + bucket <= Atlas.PAGE) {
+      const y = p.nextY;
+      p.nextY += bucket;
+      p.shelves.set(bucket, { y, x: w });
+      return [0, y];
+    }
+    return null;
+  }
+
   reset(): void {
-    for (const p of this.pages) p.ctx.clearRect(0, 0, Atlas.PAGE, Atlas.PAGE);
-    this.pages.forEach((p) => {
-      p.shelfY = 0;
-      p.shelfH = 0;
-      p.x = 0;
-    });
-    this.nearlyFull = false;
+    for (const p of this.pages) {
+      p.ctx.clearRect(0, 0, Atlas.PAGE, Atlas.PAGE);
+      p.shelves.clear();
+      p.nextY = 0;
+    }
+    this.overflowed = false;
+  }
+
+  /**
+   * keep のスプライトだけを新しいページに詰め直し、それ以外の領域を空ける。
+   * スプライトの位置はその場で書き換えるので、参照している側は何もしなくてよい。
+   * 詰め直しきれなかったら false (呼び出し側で全部作り直す)。
+   */
+  compact(keep: Iterable<Sprite>): boolean {
+    const old = this.pages;
+    this.pages = [];
+    this.overflowed = false;
+    for (const s of keep) {
+      if (this.pages.length >= Atlas.MAX_PAGES - 2 && !this.pages.some((p) => this.fits(p, s.w, Math.ceil(s.h / 8) * 8))) {
+        // 残しておきたいものだけで埋まってしまう: あきらめて全部作り直す
+        for (const p of this.pages) p.canvas.width = 0;
+        this.pages = old;
+        this.reset();
+        this.overflowed = true;
+        return false;
+      }
+      const slot = this.alloc(s.w, s.h);
+      slot.ctx.drawImage(s.canvas, s.sx, s.sy, s.w, s.h, slot.sx, slot.sy, s.w, s.h);
+      s.canvas = slot.canvas;
+      s.sx = slot.sx;
+      s.sy = slot.sy;
+    }
+    for (const p of old) p.canvas.width = 0;
+    return true;
+  }
+
+  private fits(p: Page, w: number, bucket: number): boolean {
+    const shelf = p.shelves.get(bucket);
+    return (shelf !== undefined && shelf.x + w <= Atlas.PAGE) || p.nextY + bucket <= Atlas.PAGE;
   }
 
   get pageCount(): number {
@@ -140,7 +207,7 @@ export const atlas = new Atlas();
 export function toSprite(r: Raster, ox = 0, oy = 0): Sprite {
   const slot = atlas.alloc(r.w, r.h);
   slot.ctx.putImageData(new ImageData(r.data, r.w, r.h), slot.sx, slot.sy);
-  return { canvas: slot.canvas, sx: slot.sx, sy: slot.sy, w: r.w, h: r.h, ox, oy };
+  return { canvas: slot.canvas, sx: slot.sx, sy: slot.sy, w: r.w, h: r.h, ox, oy, used: spriteFrame };
 }
 
 /** スプライトのキャッシュ。 */
@@ -159,5 +226,12 @@ export class SpriteCache<T> {
   }
   get size(): number {
     return this.map.size;
+  }
+  /** keep が false を返した項目を捨てる */
+  prune(keep: (v: T) => boolean): void {
+    for (const [k, v] of this.map) if (!keep(v)) this.map.delete(k);
+  }
+  values(): IterableIterator<T> {
+    return this.map.values();
   }
 }

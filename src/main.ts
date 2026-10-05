@@ -1,5 +1,6 @@
 import { DynamicLayer, MapLayer } from "./render/renderer";
-import { clearSpriteCache, spriteAtlasNearlyFull } from "./render/sprites";
+import { maintainSpriteAtlas } from "./render/sprites";
+import { nextSpriteFrame } from "./render/raster";
 import { TrainSystem } from "./sim/trains";
 import { hashString } from "./sim/rng";
 import { SAVE_KEY, deserialize, serialize } from "./sim/save";
@@ -279,11 +280,9 @@ function frame(now: number): void {
   const dt = Math.min(0.25, (now - lastTime) / 1000);
   lastTime = now;
   elapsed += dt;
-  // スプライトのアトラスが埋まりそうなら、描画の合間に全部作り直す
-  if (spriteAtlasNearlyFull()) {
-    clearSpriteCache();
-    layer.invalidate();
-  }
+  // スプライトのアトラスが埋まりそうなら、最近使っていないものを捨てて詰め直す
+  nextSpriteFrame();
+  if (maintainSpriteAtlas() === "cleared") layer.invalidate();
   // 念のため定期的に静的レイヤーを描き直す (キャンバスの中身が失われたときの保険)
   if (now - lastFullRefresh > 60000) {
     lastFullRefresh = now;

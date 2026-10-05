@@ -3,7 +3,7 @@ import { buildingFloors, isMixedUse } from "../sim/growth";
 import { DIR_E, DIR_N, DIR_S, DIR_W, BState, R8_BIT, R8_E, R8_W, railIsStraightX } from "../sim/world";
 import { HALF_H, HALF_W, TILE_H, TILE_W, diamondRows, pixelToUV, uvToPixel } from "./iso";
 import { PAL, ROOFS, SIGNS, TOWER_WALLS, WALLS } from "./palette";
-import { RGB, Raster, Sprite, SpriteCache, atlas, mix, shade, toSprite } from "./raster";
+import { RGB, Raster, Sprite, SpriteCache, atlas, currentSpriteFrame, mix, shade, toSprite } from "./raster";
 
 const cache = new SpriteCache<Sprite>();
 const pairCache = new SpriteCache<{ base: Sprite; emissive: Sprite | null }>();
@@ -15,9 +15,37 @@ export function clearSpriteCache(): void {
   atlas.reset();
 }
 
-/** アトラスが残り少ないか。true なら次のフレームの頭で clearSpriteCache する */
-export function spriteAtlasNearlyFull(): boolean {
-  return atlas.nearlyFull;
+/** この何フレーム以内に使ったスプライトを compact で残すか */
+const KEEP_FRAMES = 90;
+
+/**
+ * アトラスが埋まりそうなら、最近使ったスプライトだけを残して詰め直す。
+ * 毎フレームの頭で呼ぶ。"cleared" を返したときは全部作り直したので、
+ * 呼び出し側は静的レイヤーを描き直す必要がある。
+ */
+export function maintainSpriteAtlas(): "ok" | "compacted" | "cleared" {
+  if (!atlas.nearlyFull) return "ok";
+  if (atlas.overflowed) {
+    clearSpriteCache();
+    return "cleared";
+  }
+  const since = currentSpriteFrame() - KEEP_FRAMES;
+  const keep = new Set<Sprite>();
+  cache.prune((s) => {
+    if (s.used < since) return false;
+    keep.add(s);
+    return true;
+  });
+  pairCache.prune((p) => {
+    const recent = p.base.used >= since || (p.emissive !== null && p.emissive.used >= since);
+    if (!recent) return false;
+    keep.add(p.base);
+    if (p.emissive) keep.add(p.emissive);
+    return true;
+  });
+  if (atlas.compact(keep)) return "compacted";
+  clearSpriteCache();
+  return "cleared";
 }
 
 export type GroundKind = "grass" | "lot" | "park" | "concrete" | "water" | "sand" | "rubble" | "paddy" | "field" | "flower" | "orchard" | "farmpath";
@@ -719,6 +747,15 @@ function putWindow(r: Raster, e: Raster, x: number, y: number, dayColor: RGB, li
   return lit !== null;
 }
 
+/**
+ * 建物の本体と発光をアトラスに置く。本体は lights に依らないので、
+ * 同じ建物の別の明かりパターンと共有する (アトラスの消費を抑える)。
+ */
+function packBuilding(spec: BuildingSpec, r: Raster, e: Raster, ox: number, oy: number, anyLight: boolean): { base: Sprite; emissive: Sprite | null } {
+  const base = cache.get(`bb:${spec.level}:${spec.style}:${spec.floors}:${spec.state}`, () => toSprite(r, ox, oy));
+  return { base, emissive: anyLight ? toSprite(e, ox, oy) : null };
+}
+
 /** 建物スプライト (壁・屋根のみ、地面は別)。oy = 高さ - 16。 */
 export function buildingSprite(spec: BuildingSpec): { base: Sprite; emissive: Sprite | null } {
   const key = `b:${spec.level}:${spec.style}:${spec.floors}:${spec.state}:${spec.lights}`;
@@ -844,7 +881,7 @@ function houseSprite(spec: BuildingSpec): { base: Sprite; emissive: Sprite | nul
     r.disc(tx + 0.5, ty - 3, 2.2, PAL.canopy);
     r.set(tx, ty - 4, PAL.canopyLight);
   }
-  return { base: toSprite(r, 0, baseTop), emissive: anyLight ? toSprite(e, 0, baseTop) : null };
+  return packBuilding(spec, r, e, 0, baseTop, anyLight);
 }
 
 /** 雑居ビル: 細長く、各階に看板、屋上に広告塔。夜はネオンが光る */
@@ -958,7 +995,7 @@ function mixedUseSprite(spec: BuildingSpec): { base: Sprite; emissive: Sprite | 
     drawScaffoldAndCrane(r, e, x0, x1, fw, baseTop, floors, fh, true);
     anyLight = true;
   }
-  return { base: toSprite(r, 0, baseTop), emissive: anyLight ? toSprite(e, 0, baseTop) : null };
+  return packBuilding(spec, r, e, 0, baseTop, anyLight);
 }
 
 /** 商店・アパート・中層・高層の箱型ビル */
@@ -1083,7 +1120,7 @@ function boxBuildingSprite(spec: BuildingSpec): { base: Sprite; emissive: Sprite
     drawScaffoldAndCrane(r, e, x0, x1, fw, baseTop, floors, fh, level >= 2);
     if (level >= 2) anyLight = true;
   }
-  return { base: toSprite(r, 0, baseTop), emissive: anyLight ? toSprite(e, 0, baseTop) : null };
+  return packBuilding(spec, r, e, 0, baseTop, anyLight);
 }
 
 /**
@@ -1198,7 +1235,7 @@ function bigTowerSprite(spec: BuildingSpec): { base: Sprite; emissive: Sprite | 
       anyLight = true;
     }
   }
-  return { base: toSprite(r, 16, baseTop + 8), emissive: anyLight ? toSprite(e, 16, baseTop + 8) : null };
+  return packBuilding(spec, r, e, 16, baseTop + 8, anyLight);
 }
 
 /** ランドマーク: 市役所 (5)、タワー (6)、観覧車 (7) */
@@ -1217,12 +1254,12 @@ function landmarkSprite(spec: BuildingSpec): { base: Sprite; emissive: Sprite | 
       }
     });
     drawScaffoldAndCrane(r, e, 4, 28, 24, baseTop, 0, 6, true);
-    return { base: toSprite(r, 0, baseTop), emissive: toSprite(e, 0, baseTop) };
+    return packBuilding(spec, r, e, 0, baseTop, true);
   }
   if (spec.level === 5) drawHall(r, e, baseTop, spec);
   else if (spec.level === 6) drawTower(r, e, baseTop);
   else drawWheel(r, e, baseTop, spec);
-  return { base: toSprite(r, 0, baseTop), emissive: toSprite(e, 0, baseTop) };
+  return packBuilding(spec, r, e, 0, baseTop, true);
 }
 
 function drawHall(r: Raster, e: Raster, baseTop: number, spec: BuildingSpec): void {

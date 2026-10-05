@@ -1,10 +1,10 @@
-import { visibleFloors } from "../sim/growth";
+import { buildingFloors, visibleFloors } from "../sim/growth";
 import { fbm, hash2 } from "../sim/rng";
 import { CarPose, TrainSystem } from "../sim/trains";
-import { BState, DX, DY, Kind, World, cornerHeights, idx, inBounds, railConnections, railIsStraightX, roadConnections } from "../sim/world";
+import { BState, DX, DY, Kind, LEVEL_BIG_TOWER, World, cornerHeights, idx, inBounds, railConnections, railIsStraightX, roadConnections } from "../sim/world";
 import { HALF_H, HALF_W, LEVEL_H, TILE_H, TILE_W, heightAt, tileOrigin, uvToPixel } from "./iso";
 import { PAL } from "./palette";
-import { Sprite } from "./raster";
+import { Sprite, touch } from "./raster";
 import {
   GroundKind,
   SeasonTint,
@@ -43,6 +43,7 @@ export class TilePainter {
   ) {}
 
   blit(s: Sprite, px: number, py: number, rel?: readonly [number, number, number, number]): void {
+    touch(s);
     if (rel && (rel[0] | rel[1] | rel[2] | rel[3]) !== 0) {
       const t = shearTransform(px, py, s.oy, rel);
       this.ctx.setTransform(t[0], t[1], t[2], t[3], t[4], t[5]);
@@ -62,6 +63,7 @@ export class TilePainter {
   }
 
   blitEmissive(s: Sprite, px: number, py: number): void {
+    touch(s);
     this.ectx.drawImage(s.canvas, s.sx, s.sy, s.w, s.h, px - s.ox, py - s.oy, s.w, s.h);
   }
 
@@ -327,7 +329,10 @@ interface Chunk {
   /** ワールド座標でのキャンバス左上 */
   x0: number;
   y0: number;
+  /** 全体を描き直す必要がある */
   dirty: boolean;
+  /** 部分的に描き直すタイル (tile index → 必要な上方向の余白 px) */
+  dirtyTiles: Map<number, number>;
   lastUsed: number;
 }
 
@@ -335,7 +340,28 @@ export const CHUNK = 32;
 /** 建物やタワーが上に伸びるぶんの余白 (px) */
 const CHUNK_TOP = 330;
 const CHUNK_BOTTOM = 40;
-const MAX_CHUNKS = 28;
+const MAX_CHUNKS = 16;
+/** 1 チャンクの全描画でおよそ何タイル描くか (描画予算の単位) */
+const CHUNK_TILE_COST = 3600;
+/** 1 フレームに描くタイル数の予算 (チャンク 3 つぶん) */
+const TILE_BUDGET = CHUNK_TILE_COST * 3;
+/** 部分描き直しの対象がこれを超えたらチャンク全体を描き直す */
+const PARTIAL_MAX = 24;
+
+/**
+ * タイルに描かれるスプライトが、タイル原点からどれだけ上に伸びうるか (px) の上限。
+ * 描き直しの範囲を絞るのに使うので、少し大きめに見積もる。
+ */
+export function tileSpriteTop(kind: number, level: number, style: number): number {
+  if (kind === Kind.Building) {
+    if (level === LEVEL_BIG_TOWER) return CHUNK_TOP;
+    if (level >= 5) return 150;
+    // 階の高さ 6px + 屋根・看板・クレーンなどの余白
+    return buildingFloors(level, style) * 6 + 64;
+  }
+  // 地面の傾斜 (3 段 = 24px) + 木・神社・駅など
+  return 64;
+}
 
 /**
  * マップをチャンクに分けて描く静的レイヤー。見えている範囲だけ描き、
@@ -351,6 +377,7 @@ export class MapLayer {
   private snapProgress: Uint8Array;
   private snapLights: Uint8Array;
   private snapLevel: Uint8Array;
+  private snapStyle: Uint8Array;
   private frame = 0;
 
   constructor(readonly world: World) {
@@ -359,11 +386,15 @@ export class MapLayer {
     this.snapProgress = new Uint8Array(world.bProgress);
     this.snapLights = new Uint8Array(world.lights);
     this.snapLevel = new Uint8Array(world.bLevel);
+    this.snapStyle = new Uint8Array(world.bStyle);
   }
 
   /** 全チャンクを捨てる (季節が変わったときなど) */
   invalidate(): void {
-    for (const c of this.chunks.values()) c.dirty = true;
+    for (const c of this.chunks.values()) {
+      c.dirty = true;
+      c.dirtyTiles.clear();
+    }
   }
 
   /** ワールドの変化を調べ、関係するチャンクを汚す。1 時間ごとなど、変化がありうるときに呼ぶ。 */
@@ -378,7 +409,12 @@ export class MapLayer {
         w.lights[i] !== this.snapLights[i] ||
         w.bLevel[i] !== this.snapLevel[i]
       ) {
-        this.markTile(i % w.w, Math.floor(i / w.w));
+        // 描き直す範囲は、変化の前後で大きいほうのスプライトに合わせる
+        const top = Math.max(
+          tileSpriteTop(this.snapKind[i], this.snapLevel[i], this.snapStyle[i]),
+          tileSpriteTop(w.kind[i], w.bLevel[i], w.bStyle[i]),
+        );
+        this.markTile(i, top);
       }
     }
     this.snapKind.set(w.kind);
@@ -386,9 +422,13 @@ export class MapLayer {
     this.snapProgress.set(w.bProgress);
     this.snapLights.set(w.lights);
     this.snapLevel.set(w.bLevel);
+    this.snapStyle.set(w.bStyle);
   }
 
-  private markTile(x: number, y: number): void {
+  /** タイル i が変わった。関係するチャンクに部分描き直しを予約する (多すぎれば全体を描き直す) */
+  private markTile(i: number, top: number): void {
+    const x = i % this.world.w;
+    const y = Math.floor(i / this.world.w);
     const cx = Math.floor(x / CHUNK);
     const cy = Math.floor(y / CHUNK);
     // スプライトは上 (北西側) に伸びるので、北・西・北西のチャンクにも影響する
@@ -399,8 +439,73 @@ export class MapLayer {
       [-1, -1],
     ]) {
       const c = this.chunks.get(`${cx + dx},${cy + dy}`);
-      if (c) c.dirty = true;
+      if (!c || c.dirty) continue;
+      if (!this.tileTouchesChunk(c, x, y, top)) continue;
+      c.dirtyTiles.set(i, Math.max(top, c.dirtyTiles.get(i) ?? 0));
+      if (c.dirtyTiles.size > PARTIAL_MAX) {
+        c.dirty = true;
+        c.dirtyTiles.clear();
+      }
     }
+  }
+
+  /** タイル (x,y) の描き直し範囲 (チャンクのキャンバス座標) */
+  private tileBox(c: Chunk, x: number, y: number, top: number): [number, number, number, number] {
+    const [px, py] = c.painter.tileScreen(x, y);
+    // 2x2 タワーは幅 64 (左に 16 はみ出す)。高さは地形 3 段 + スプライトの上端
+    return [px - 16, py - 3 * LEVEL_H - top, 64, 3 * LEVEL_H + top + TILE_H + CHUNK_BOTTOM];
+  }
+
+  private tileTouchesChunk(c: Chunk, x: number, y: number, top: number): boolean {
+    const b = this.tileBox(c, x, y, top);
+    return b[0] + b[2] > 0 && b[1] + b[3] > 0 && b[0] < c.canvas.width && b[1] < c.canvas.height;
+  }
+
+  /**
+   * 予約されたタイルの周りだけ描き直す。範囲を消してから、そこに描き込みうるタイルを奥から順に描く。
+   * 描いたタイル数を返す。
+   */
+  private renderDirtyTiles(c: Chunk): number {
+    const w = this.world;
+    const p = c.painter;
+    p.season = this.season;
+    p.illumination = this.illumination;
+    let drawn = 0;
+    for (const [i, top] of c.dirtyTiles) {
+      const x = i % w.w;
+      const y = Math.floor(i / w.w);
+      const box = this.tileBox(c, x, y, top);
+      const [bx, by, bw, bh] = box;
+      for (const ctx of [p.ctx, p.ectx]) {
+        ctx.clearRect(bx, by, bw, bh);
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(bx, by, bw, bh);
+        ctx.clip();
+      }
+      // 原点が (d*16 + originX, s*8 + originY) のタイルのうち、箱に重なりうるもの
+      const dMin = Math.floor((bx - 48 - p.originX) / HALF_W);
+      const dMax = Math.ceil((bx + bw + 16 - p.originX) / HALF_W);
+      const sMin = Math.floor((by - TILE_H - CHUNK_BOTTOM - p.originY) / HALF_H);
+      const sMax = Math.ceil((by + bh + CHUNK_TOP - p.originY) / HALF_H);
+      for (let sum = sMin; sum <= sMax; sum++) {
+        const oy = sum * HALF_H + p.originY;
+        for (let diff = dMin; diff <= dMax; diff++) {
+          if ((sum + diff) % 2 !== 0) continue;
+          const tx = (sum + diff) / 2;
+          const ty = (sum - diff) / 2;
+          if (!inBounds(w, tx, ty)) continue;
+          const j = idx(w, tx, ty);
+          // 手前のタイルは、そのスプライトが箱の下端まで届かなければ描かなくてよい
+          if (oy - tileSpriteTop(w.kind[j], w.bLevel[j], w.bStyle[j]) > by + bh) continue;
+          p.drawTile(tx, ty);
+          drawn++;
+        }
+      }
+      for (const ctx of [p.ctx, p.ectx]) ctx.restore();
+    }
+    c.dirtyTiles.clear();
+    return drawn;
   }
 
   private chunkBounds(cx: number, cy: number): { x0: number; y0: number; w: number; h: number } {
@@ -428,7 +533,7 @@ export class MapLayer {
       ctx.imageSmoothingEnabled = false;
       ectx.imageSmoothingEnabled = false;
       const painter = new TilePainter(this.world, ctx, ectx, -b.x0, -b.y0);
-      c = { cx, cy, canvas, emissive, painter, x0: b.x0, y0: b.y0, dirty: true, lastUsed: this.frame };
+      c = { cx, cy, canvas, emissive, painter, x0: b.x0, y0: b.y0, dirty: true, dirtyTiles: new Map(), lastUsed: this.frame };
       for (const cv of [canvas, emissive]) {
         cv.addEventListener("contextlost", () => (c!.dirty = true));
         cv.addEventListener("contextrestored", () => (c!.dirty = true));
@@ -448,7 +553,8 @@ export class MapLayer {
     }
   }
 
-  private renderChunk(c: Chunk): void {
+  /** チャンク全体を描き直す。描いたタイル数を返す。 */
+  private renderChunk(c: Chunk): number {
     const w = this.world;
     c.painter.season = this.season;
     c.painter.illumination = this.illumination;
@@ -463,16 +569,28 @@ export class MapLayer {
     const sMax = s0 + 2 * (CHUNK - 1) + Math.ceil(CHUNK_TOP / HALF_H) + 2;
     const dMin = d0 - 2;
     const dMax = d0 + 2 * (CHUNK - 1) + 1;
+    const p = c.painter;
+    const bottom = c.canvas.height;
+    let drawn = 0;
     for (let sum = sMin; sum <= sMax; sum++) {
+      const oy = sum * HALF_H + p.originY;
       for (let diff = dMin; diff <= dMax; diff++) {
         if ((sum + diff) % 2 !== 0) continue;
         const tx = (sum + diff) / 2;
         const ty = (sum - diff) / 2;
         if (!inBounds(w, tx, ty)) continue;
-        c.painter.drawTile(tx, ty);
+        // チャンクの下にあるタイルは、スプライトが上に伸びてきて見える場合だけ描く
+        if (oy > bottom) {
+          const j = idx(w, tx, ty);
+          if (oy - tileSpriteTop(w.kind[j], w.bLevel[j], w.bStyle[j]) > bottom) continue;
+        }
+        p.drawTile(tx, ty);
+        drawn++;
       }
     }
     c.dirty = false;
+    c.dirtyTiles.clear();
+    return drawn;
   }
 
   /** 発光レイヤーだけ描く (draw の後に呼ぶ) */
@@ -489,16 +607,17 @@ export class MapLayer {
     const w = this.world;
     const nx = Math.ceil(w.w / CHUNK);
     const ny = Math.ceil(w.h / CHUNK);
-    let budget = 3; // 1 フレームに描き直すチャンク数の上限
+    let budget = TILE_BUDGET; // 1 フレームに描き直すタイル数の上限
     for (let cy = 0; cy < ny; cy++) {
       for (let cx = 0; cx < nx; cx++) {
         const b = this.chunkBounds(cx, cy);
         if (b.x0 + b.w < viewX0 || b.x0 > viewX0 + viewW || b.y0 + b.h < viewY0 || b.y0 > viewY0 + viewH) continue;
         const c = this.getChunk(cx, cy);
         c.lastUsed = this.frame;
-        if (c.dirty && budget > 0) {
-          this.renderChunk(c);
-          budget--;
+        if (c.dirty) {
+          if (budget >= CHUNK_TILE_COST || budget === TILE_BUDGET) budget -= this.renderChunk(c);
+        } else if (c.dirtyTiles.size > 0 && budget > 0) {
+          budget -= this.renderDirtyTiles(c);
         }
         ctx.drawImage(c.canvas, c.x0, c.y0);
         if (ectx) ectx.drawImage(c.emissive, c.x0, c.y0);
