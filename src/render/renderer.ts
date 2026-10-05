@@ -20,6 +20,7 @@ import {
   orchardTreeSprite,
   shrineSprite,
   treeLightsSprite,
+  treeShape,
   treeSprite,
 } from "./sprites";
 
@@ -138,7 +139,7 @@ export class TilePainter {
             if (hash2(w.seed + 40 + n, x, y) > 0.55) continue;
             const u = 0.2 + hash2(w.seed + 41 + n, x, y) * 0.6;
             const v = 0.2 + hash2(w.seed + 42 + n, x, y) * 0.6;
-            this.drawTree(px, py, rel, u, v, variant * 3 + n);
+            this.drawTree(px, py, rel, u, v, variant * 3 + n, false, x, y);
           }
         }
         break;
@@ -161,11 +162,11 @@ export class TilePainter {
         const northEdge = !(inBounds(w, x, y - 1) && w.kind[idx(w, x, y - 1)] === Kind.Farm && (w.bStyle[idx(w, x, y - 1)] & 3) === type);
         const westEdge = !(inBounds(w, x - 1, y) && w.kind[idx(w, x - 1, y)] === Kind.Farm && (w.bStyle[idx(w, x - 1, y)] & 3) === type);
         if (northEdge && hash2(w.seed + 70, 0, y) < 0.35) {
-          this.drawTree(px, py, rel, 0.25, 0.06, variant * 5);
-          this.drawTree(px, py, rel, 0.75, 0.06, variant * 5 + 1);
+          this.drawTree(px, py, rel, 0.25, 0.06, variant * 5, false, x, y);
+          this.drawTree(px, py, rel, 0.75, 0.06, variant * 5 + 1, false, x, y);
         } else if (westEdge && hash2(w.seed + 71, x, 0) < 0.35) {
-          this.drawTree(px, py, rel, 0.06, 0.3, variant * 5 + 2);
-          this.drawTree(px, py, rel, 0.06, 0.8, variant * 5 + 3);
+          this.drawTree(px, py, rel, 0.06, 0.3, variant * 5 + 2, false, x, y);
+          this.drawTree(px, py, rel, 0.06, 0.8, variant * 5 + 3, false, x, y);
         }
         break;
       }
@@ -184,7 +185,7 @@ export class TilePainter {
           const [u, v] = spots[n];
           const ju = u + (hash2(w.seed + 11 + n, x, y) - 0.5) * 0.2;
           const jv = v + (hash2(w.seed + 17 + n, x, y) - 0.5) * 0.2;
-          this.drawTree(px, py, rel, ju, jv, variant * 3 + n);
+          this.drawTree(px, py, rel, ju, jv, variant * 3 + n, false, x, y);
         }
         break;
       }
@@ -195,8 +196,8 @@ export class TilePainter {
         break;
       }
       case Kind.Park:
-        this.drawTree(px, py, rel, 0.3, 0.3, variant, this.illumination);
-        this.drawTree(px, py, rel, 0.72, 0.7, variant + 1, this.illumination);
+        this.drawTree(px, py, rel, 0.3, 0.3, variant, this.illumination, x, y);
+        this.drawTree(px, py, rel, 0.72, 0.7, variant + 1, this.illumination, x, y);
         break;
       case Kind.Road: {
         const mask = roadConnections(w, x, y);
@@ -271,22 +272,35 @@ export class TilePainter {
     if (sp.emissive) this.blitEmissive(sp.emissive, cx, cy);
   }
 
-  private drawTree(px: number, py: number, rel: readonly [number, number, number, number], u: number, v: number, variant: number, lights = false): void {
+  /**
+   * 常緑樹の多い地帯か。ゆるやかなノイズで決めるので、針葉樹林と落葉樹林がまとまって現れる。
+   * 0=落葉樹ばかり 1=混じる 2=針葉樹ばかり
+   */
+  private evergreenZone(x: number, y: number): 0 | 1 | 2 {
+    const n = fbm(this.world.seed + 970, x / 11, y / 11, 2);
+    return n > 0.6 ? 2 : n > 0.55 ? 1 : 0;
+  }
+
+  private drawTree(px: number, py: number, rel: readonly [number, number, number, number], u: number, v: number, variant: number, lights = false, x = 0, y = 0): void {
     const [lx, ly] = uvToPixel(u, v);
     const h = heightAt(rel, u, v) * LEVEL_H;
+    const zone = this.evergreenZone(x, y);
+    const r = hash2(this.world.seed + 971, x * 16 + (variant & 15), y * 16 + ((variant >> 4) & 15));
+    const evergreen = zone === 2 ? r < 0.9 : zone === 1 ? r < 0.4 : r < 0.03;
+    const shape = treeShape(variant, evergreen);
     if (lights) {
       const tx = px + Math.round(lx);
       const ty = py + Math.round(ly - h);
-      this.blit(treeSprite(variant, this.season === 3 ? 3 : 0), tx, ty);
+      this.blit(treeSprite(variant, this.season === 3 ? 3 : 0, shape), tx, ty);
       this.blitEmissive(treeLightsSprite(variant), tx, ty);
       return;
     }
-    // 春は一部が桜、秋は多くが紅葉、冬は雪をかぶる
+    // 春は一部が桜、秋は多くが紅葉、冬は雪をかぶる (針葉樹は雪だけ)
     let tint = 0;
     if (this.season === 0 && variant % 4 === 0) tint = 1;
     else if (this.season === 2 && variant % 3 !== 0) tint = 2;
     else if (this.season === 3) tint = 3;
-    this.blit(treeSprite(variant, tint), px + Math.round(lx), py + Math.round(ly - h));
+    this.blit(treeSprite(variant, tint, shape), px + Math.round(lx), py + Math.round(ly - h));
   }
 
   private drawEdgeFace(x: number, y: number, px: number, py: number, rel: readonly [number, number, number, number]): void {

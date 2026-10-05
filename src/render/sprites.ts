@@ -251,13 +251,15 @@ export function groundSprite(kind: GroundKind, rel: readonly [number, number, nu
 // 木
 
 /** 木の形: 0=丸い広葉樹 1=針葉樹 (常緑) 2=細長い木 (ポプラ) 3=横に広い木 */
-export function treeShape(variant: number): number {
-  return [0, 0, 1, 2, 0, 3, 1, 0][((variant % 8) + 8) % 8];
-}
+export const TREE_CONIFER = 1;
 
-/** 常緑樹か (桜・紅葉にならない) */
-export function treeIsEvergreen(variant: number): boolean {
-  return treeShape(variant) === 1;
+/**
+ * 木の形を決める。evergreen なら針葉樹、そうでなければ落葉樹のどれか。
+ * 常緑樹と落葉樹が混ざりすぎないよう、どちらにするかは呼び出し側が場所のノイズで決める。
+ */
+export function treeShape(variant: number, evergreen: boolean): number {
+  if (evergreen) return TREE_CONIFER;
+  return [0, 0, 2, 0, 0, 3, 0, 0][((variant % 8) + 8) % 8];
 }
 
 const EVERGREEN: RGB = [36, 92, 60];
@@ -268,9 +270,8 @@ const EVERGREEN_DARK: RGB = [24, 68, 44];
  * 木。基部中央が原点 (ox=5, oy=15)。tint: 0=緑 1=桜 2=紅葉 3=雪。
  * 形は variant で決まり、針葉樹は季節で色を変えない (雪だけかぶる)。
  */
-export function treeSprite(variant: number, tint = 0): Sprite {
-  const shape = treeShape(variant);
-  if (shape === 1 && tint !== 3) tint = 0;
+export function treeSprite(variant: number, tint = 0, shape = treeShape(variant, false)): Sprite {
+  if (shape === TREE_CONIFER && tint !== 3) tint = 0;
   const key = `t:${shape}:${variant % 3}:${tint}`;
   return cache.get(key, () => {
     const r = new Raster(11, 16);
